@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Proposal History &middot; Trading Agent{% endblock %}
+{% block content %}
+<div class="mb-4 flex items-end justify-between gap-4 flex-wrap">
+  <div>
+    <h1 class="text-xl font-semibold">Proposal History</h1>
+    <p class="text-sm text-slate-400">All proposals across mechanical and LLM sources.</p>
+  </div>
+
+  <form method="get" class="flex flex-wrap items-end gap-2 text-xs">
+    <label class="flex flex-col">
+      <span class="text-slate-500 mb-1">tier</span>
+      <select name="tier" class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5">
+        <option value="" {% if not filters.tier %}selected{% endif %}>all</option>
+        <option value="tier_1" {% if filters.tier == 'tier_1' %}selected{% endif %}>tier_1</option>
+        <option value="tier_2" {% if filters.tier == 'tier_2' %}selected{% endif %}>tier_2</option>
+        <option value="tier_3" {% if filters.tier == 'tier_3' %}selected{% endif %}>tier_3</option>
+      </select>
+    </label>
+    <label class="flex flex-col">
+      <span class="text-slate-500 mb-1">model</span>
+      <input type="text" name="model_used" value="{{ filters.model_used }}" placeholder="gemini, ollama, mechanical_*"
+             class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 w-44" />
+    </label>
+    <label class="flex items-center gap-1.5">
+      <input type="checkbox" name="rejected_only" value="true" {% if filters.rejected_only %}checked{% endif %} />
+      <span>rejected only</span>
+    </label>
+    <label class="flex flex-col">
+      <span class="text-slate-500 mb-1">limit</span>
+      <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="500"
+             class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 w-20" />
+    </label>
+    <button type="submit" class="bg-slate-700 hover:bg-slate-600 text-white rounded px-3 py-1.5">Apply</button>
+  </form>
+</div>
+
+<div class="overflow-x-auto rounded-lg border border-slate-800">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-900 text-slate-400 text-xs uppercase">
+      <tr>
+        <th class="px-3 py-2 text-left">created</th>
+        <th class="px-3 py-2 text-left">ticker</th>
+        <th class="px-3 py-2 text-left">side</th>
+        <th class="px-3 py-2 text-left">tier</th>
+        <th class="px-3 py-2 text-left">model</th>
+        <th class="px-3 py-2 text-right">conf</th>
+        <th class="px-3 py-2 text-right">stop</th>
+        <th class="px-3 py-2 text-right">target</th>
+        <th class="px-3 py-2 text-left">status / reason</th>
+      </tr>
+    </thead>
+    <tbody class="bg-slate-950">
+      {% for r in proposals %}
+        <tr class="border-t border-slate-900 hover:bg-slate-900/50">
+          <td class="px-3 py-2 font-mono text-xs text-slate-400">{{ r.created_at }}</td>
+          <td class="px-3 py-2 font-semibold">{{ r.ticker }}</td>
+          <td class="px-3 py-2">
+            <span class="text-xs uppercase {% if r.side == 'buy' %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ r.side }}</span>
+          </td>
+          <td class="px-3 py-2 text-xs text-amber-300">{{ r.tier }}</td>
+          <td class="px-3 py-2 text-xs text-slate-300">{{ r.model_used or '—' }}</td>
+          <td class="px-3 py-2 text-right font-mono">{{ r.confidence }}</td>
+          <td class="px-3 py-2 text-right font-mono">{% if r.stop %}${{ "%.2f"|format(r.stop) }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right font-mono">{% if r.target %}${{ "%.2f"|format(r.target) }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-xs">
+            {% if r.rejected_reason %}
+              <span class="text-rose-300">rejected: {{ r.rejected_reason }}</span>
+            {% else %}
+              <span class="text-emerald-300">live / executed</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="px-3 py-8 text-center text-slate-500">No proposals match these filters.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

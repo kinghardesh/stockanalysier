@@ -1,0 +1,44 @@
+# --- secrets / env ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- pytest / mypy / coverage ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- runtime ---
+*.log
+*.sqlite
+*.db
+postgres_data/
+redis_data/
+ollama_data/

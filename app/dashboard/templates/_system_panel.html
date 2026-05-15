@@ -1,0 +1,64 @@
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+  <section class="rounded-lg border {% if kill_switch %}border-rose-700 bg-rose-950/40{% else %}border-slate-800 bg-slate-900{% endif %} p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm uppercase tracking-wide text-slate-400">Kill Switch</h2>
+      <span class="text-xs px-2 py-0.5 rounded
+                   {% if kill_switch %}bg-rose-800 text-rose-100{% else %}bg-emerald-800 text-emerald-100{% endif %}">
+        {{ "ON" if kill_switch else "OFF" }}
+      </span>
+    </div>
+    <p class="text-xs text-slate-400 mt-2">
+      When ON, all scheduled jobs and stream consumers halt. Trades are not submitted.
+      {% if kill_ttl and kill_ttl > 0 %}
+        Auto-expires in {{ kill_ttl }}s.
+      {% elif kill_switch %}
+        Manual reset required (no TTL set).
+      {% endif %}
+    </p>
+    <button hx-post="/dashboard/system/kill-switch"
+            hx-target="#system-panel"
+            hx-swap="innerHTML"
+            hx-confirm="{% if kill_switch %}Turn the kill switch OFF and resume trading?{% else %}Engage the kill switch and halt ALL trading?{% endif %}"
+            class="mt-3 w-full text-sm font-medium rounded px-3 py-2
+                   {% if kill_switch %}bg-emerald-600 hover:bg-emerald-500 text-white{% else %}bg-rose-700 hover:bg-rose-600 text-white{% endif %}">
+      {% if kill_switch %}Resume trading{% else %}Engage kill switch{% endif %}
+    </button>
+  </section>
+
+  <section class="rounded-lg border border-slate-800 bg-slate-900 p-4">
+    <h2 class="text-sm uppercase tracking-wide text-slate-400">Start-of-Day Equity</h2>
+    <div class="mt-3 text-2xl font-mono font-bold
+                {% if sod_equity == '(not set)' %}text-rose-300{% else %}text-emerald-300{% endif %}">
+      {% if sod_equity == '(not set)' %}{{ sod_equity }}{% else %}${{ sod_equity }}{% endif %}
+    </div>
+    <p class="text-xs text-slate-400 mt-2">
+      The daily-loss circuit breaker uses this baseline. If unset, the system halts.
+    </p>
+    {% if sod_equity == '(not set)' %}
+      <div class="mt-3 text-xs text-amber-300">
+        Run <code class="bg-slate-800 px-1 rounded">python scripts/snapshot_equity_now.py</code>
+        then disable the kill switch.
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="rounded-lg border border-slate-800 bg-slate-900 p-4">
+    <h2 class="text-sm uppercase tracking-wide text-slate-400">LLM Rate Counters</h2>
+    <div class="mt-3 space-y-2 text-sm">
+      {% for name, c in rate_counters.items() %}
+        <div class="flex items-center justify-between border-b border-slate-800 pb-1.5 last:border-0">
+          <div class="font-mono text-slate-300">{{ name }}</div>
+          <div class="text-xs text-slate-400">
+            <span class="text-slate-200 font-mono">{{ c.minute }}</span>/min &middot;
+            <span class="text-slate-200 font-mono">{{ c.day }}</span>/day
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    <p class="text-xs text-slate-500 mt-3">
+      Counts current minute &amp; today only. Gemini free tier caps applied in the orchestrator.
+    </p>
+  </section>
+
+</div>

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" class="bg-slate-950 text-slate-100">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Log in &middot; Trading Agent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen flex items-center justify-center">
+  <form method="post" action="/dashboard/login"
+        class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-4">
+    <div>
+      <h1 class="text-lg font-semibold">Trading Agent</h1>
+      <p class="text-sm text-slate-400">Local dashboard &mdash; paper trading only.</p>
+    </div>
+    {% if error %}
+      <div class="rounded border border-rose-700 bg-rose-900/40 text-rose-200 text-sm px-3 py-2">
+        {{ error }}
+      </div>
+    {% endif %}
+    <label class="block text-sm">
+      <span class="text-slate-300">Access token</span>
+      <input type="password" name="token" required autofocus
+             class="mt-1 w-full rounded bg-slate-800 border border-slate-700 px-3 py-2 text-sm
+                    focus:border-emerald-500 focus:outline-none" />
+      <span class="block mt-1 text-xs text-slate-500">Set as <code>DASHBOARD_AUTH_TOKEN</code> in .env.</span>
+    </label>
+    <button type="submit"
+            class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded px-3 py-2 text-sm">
+      Log in
+    </button>
+  </form>
+</body>
+</html>

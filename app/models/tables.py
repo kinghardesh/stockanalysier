@@ -1,0 +1,174 @@
+import uuid
+from datetime import datetime
+from decimal import Decimal
+from typing import Optional
+
+from sqlalchemy import (
+    Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer,
+    Numeric, String, Text, text,
+)
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.db import Base
+from app.models.enums import (
+    ProposalSide, ProposalTier, RiskEventType, SignalSource, TradeSleeve, TradeStatus,
+)
+
+
+class Signal(Base):
+    __tablename__ = "signals"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"), index=True
+    )
+    source: Mapped[SignalSource] = mapped_column(
+        SAEnum(SignalSource, name="signal_source", create_type=False), nullable=False
+    )
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    signal_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_data: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    proposals: Mapped[list["TradeProposal"]] = relationship(back_populates="signal")
+
+
+class TradeProposal(Base):
+    __tablename__ = "trade_proposals"
+    __table_args__ = (CheckConstraint("confidence BETWEEN 1 AND 10", name="ck_confidence_range"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    signal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("signals.id", ondelete="CASCADE"), nullable=False
+    )
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    side: Mapped[ProposalSide] = mapped_column(
+        SAEnum(ProposalSide, name="proposal_side", create_type=False), nullable=False
+    )
+    proposed_size_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 4), nullable=True)
+    stop_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    thesis: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_used: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    tier: Mapped[ProposalTier] = mapped_column(
+        SAEnum(ProposalTier, name="proposal_tier", create_type=False), nullable=False
+    )
+    rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"), index=True
+    )
+
+    signal: Mapped["Signal"] = relationship(back_populates="proposals")
+    trades: Mapped[list["Trade"]] = relationship(back_populates="proposal")
+
+
+class Trade(Base):
+    __tablename__ = "trades"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    proposal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trade_proposals.id", ondelete="RESTRICT"), nullable=False
+    )
+    alpaca_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[TradeStatus] = mapped_column(
+        SAEnum(TradeStatus, name="trade_status", create_type=False), nullable=False
+    )
+    filled_qty: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    filled_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"), index=True
+    )
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    realized_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    sleeve: Mapped[TradeSleeve] = mapped_column(
+        SAEnum(TradeSleeve, name="trade_sleeve", create_type=False), nullable=False
+    )
+    model_used: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+    proposal: Mapped["TradeProposal"] = relationship(back_populates="trades")
+
+
+class Position(Base):
+    __tablename__ = "positions"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    qty: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    avg_entry_price: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    current_stop: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    current_target: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sleeve: Mapped[TradeSleeve] = mapped_column(
+        SAEnum(TradeSleeve, name="trade_sleeve", create_type=False), nullable=False
+    )
+
+
+class RiskEvent(Base):
+    __tablename__ = "risk_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"), index=True
+    )
+    event_type: Mapped[RiskEventType] = mapped_column(
+        SAEnum(RiskEventType, name="risk_event_type", create_type=False), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    related_proposal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trade_proposals.id", ondelete="SET NULL"), nullable=True
+    )
+    account_state_snapshot: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+
+class DailySummary(Base):
+    __tablename__ = "daily_summary"
+
+    trading_date: Mapped[datetime] = mapped_column(Date, primary_key=True)
+    starting_equity: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    ending_equity: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    total_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    fill_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    mechanical_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, server_default=text("0"))
+    llm_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, server_default=text("0"))
+    by_model: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    by_sleeve: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    proposals_total: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    proposals_executed: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    proposals_rejected: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class SanitizationLog(Base):
+    __tablename__ = "sanitization_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"), index=True
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_ref: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    original_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    stripped_fragments: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    sanitized_text: Mapped[str] = mapped_column(Text, nullable=False)

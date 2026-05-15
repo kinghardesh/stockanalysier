@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Risk Events &middot; Trading Agent{% endblock %}
+{% block content %}
+<div class="mb-4">
+  <h1 class="text-xl font-semibold">Risk Events</h1>
+  <p class="text-sm text-slate-400">
+    Rejections, circuit-breaker trips, and kill-switch toggles. Newest first.
+  </p>
+</div>
+
+<div class="overflow-x-auto rounded-lg border border-slate-800">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-900 text-slate-400 text-xs uppercase">
+      <tr>
+        <th class="px-3 py-2 text-left">timestamp</th>
+        <th class="px-3 py-2 text-left">type</th>
+        <th class="px-3 py-2 text-left">reason</th>
+        <th class="px-3 py-2 text-left">proposal</th>
+      </tr>
+    </thead>
+    <tbody class="bg-slate-950">
+      {% for e in events %}
+        <tr class="border-t border-slate-900 hover:bg-slate-900/50 align-top">
+          <td class="px-3 py-2 font-mono text-xs text-slate-400 whitespace-nowrap">{{ e.timestamp }}</td>
+          <td class="px-3 py-2">
+            <span class="text-xs uppercase
+              {% if e.event_type == 'kill_switch' %}text-rose-300
+              {% elif e.event_type == 'circuit_breaker' %}text-amber-300
+              {% else %}text-slate-300{% endif %}">{{ e.event_type }}</span>
+          </td>
+          <td class="px-3 py-2 text-sm text-slate-200">{{ e.reason }}</td>
+          <td class="px-3 py-2 font-mono text-xs text-slate-500">
+            {{ e.related_proposal_id or '—' }}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="px-3 py-8 text-center text-slate-500">No risk events recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

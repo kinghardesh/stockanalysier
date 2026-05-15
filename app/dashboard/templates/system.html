@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}System &middot; Trading Agent{% endblock %}
+{% block content %}
+<div class="mb-4">
+  <h1 class="text-xl font-semibold">System</h1>
+  <p class="text-sm text-slate-400">Kill switch, SOD equity baseline, and LLM provider rate-limit counters.</p>
+</div>
+
+<div id="system-panel">
+  {% include "_system_panel.html" %}
+</div>
+{% endblock %}

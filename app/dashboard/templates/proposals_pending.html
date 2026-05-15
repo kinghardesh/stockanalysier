@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Pending Tier 3 &middot; Trading Agent{% endblock %}
+{% block content %}
+<div class="mb-6 flex items-end justify-between">
+  <div>
+    <h1 class="text-xl font-semibold">Pending Tier 3 Approvals</h1>
+    <p class="text-sm text-slate-400">
+      High-conviction LLM proposals awaiting your sign-off. Auto-rejected after the
+      configured timeout if untouched.
+    </p>
+  </div>
+  <button hx-get="/dashboard/proposals/pending"
+          hx-target="body" hx-swap="outerHTML"
+          class="text-xs px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700">
+    Refresh
+  </button>
+</div>
+
+{% if proposals %}
+  <div id="proposals" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {% for p in proposals %}
+      {% include "_proposal_card.html" %}
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="rounded-lg border border-slate-800 bg-slate-900 px-6 py-12 text-center text-slate-400">
+    <div class="text-2xl mb-1">All clear.</div>
+    <div class="text-sm">No Tier 3 proposals are awaiting approval right now.</div>
+  </div>
+{% endif %}
+{% endblock %}

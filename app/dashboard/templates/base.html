@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" class="bg-slate-950 text-slate-100">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Trading Agent{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .badge { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <header class="bg-slate-900 border-b border-slate-800">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-6">
+        <div class="font-bold text-lg">Trading Agent</div>
+        <nav class="flex gap-4 text-sm">
+          <a href="/dashboard/proposals/pending"
+             class="{% if active=='pending' %}text-emerald-400{% else %}text-slate-300 hover:text-white{% endif %}">
+            Pending Tier 3
+          </a>
+          <a href="/dashboard/proposals/history"
+             class="{% if active=='history' %}text-emerald-400{% else %}text-slate-300 hover:text-white{% endif %}">
+            History
+          </a>
+          <a href="/dashboard/risk-events"
+             class="{% if active=='risk' %}text-emerald-400{% else %}text-slate-300 hover:text-white{% endif %}">
+            Risk Events
+          </a>
+          <a href="/dashboard/system"
+             class="{% if active=='system' %}text-emerald-400{% else %}text-slate-300 hover:text-white{% endif %}">
+            System
+          </a>
+        </nav>
+      </div>
+      <div class="flex items-center gap-3 text-xs text-slate-400">
+        <span id="env-pill" class="px-2 py-1 rounded bg-slate-800">paper</span>
+        <a href="/dashboard/logout" class="hover:text-white">Log out</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
