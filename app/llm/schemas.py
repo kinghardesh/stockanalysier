@@ -44,23 +44,44 @@ class BearCaseAssessment(BaseModel):
 
 
 def clean_schema_for_gemini(schema: dict) -> dict:
-    """Strip $defs / definitions / title and inline any $ref indirection.
+    """Make a Pydantic-emitted JSON schema acceptable to Gemini's response_schema.
 
-    Gemini's response_schema validator rejects $defs and title at any nesting depth,
-    and is unreliable with $ref resolution. This walker recursively replaces refs
-    and drops the offending keys wherever they appear.
+    Gemini accepts only an OpenAPI 3.0 subset and rejects several patterns Pydantic
+    emits by default. This walker handles all four documented failure modes:
+
+      1. `$ref` indirection — inlined from `$defs`/`definitions`.
+      2. `$defs`, `definitions`, `title` — stripped at every nesting level.
+      3. `additionalProperties: false` (from `extra="forbid"`) — stripped.
+      4. `anyOf: [X, {type:null}]` (from `Optional[X]`) — flattened to X.
+
+    If you ever see `gemini unexpected: Unknown field for Schema: <name>` again,
+    add the offending key to the strip set below.
     """
     defs = {**(schema.get("$defs", {}) or {}), **(schema.get("definitions", {}) or {})}
+    STRIP_KEYS = {"$defs", "definitions", "title", "additionalProperties"}
 
     def walk(node):
         if isinstance(node, dict):
+            # 1. Inline $ref
             if "$ref" in node and len(node) == 1:
                 name = node["$ref"].split("/")[-1]
                 if name in defs:
                     return walk(defs[name])
                 return {}
-            return {k: walk(v) for k, v in node.items()
-                    if k not in {"$defs", "definitions", "title"}}
+
+            # 4. Flatten anyOf with a null variant: Optional[X] -> X
+            if "anyOf" in node and isinstance(node["anyOf"], list):
+                non_null = [
+                    v for v in node["anyOf"]
+                    if not (isinstance(v, dict) and v.get("type") == "null")
+                ]
+                if len(non_null) == 1 and len(non_null) < len(node["anyOf"]):
+                    rest = {k: v for k, v in node.items() if k != "anyOf"}
+                    merged = {**non_null[0], **rest}
+                    return walk(merged)
+
+            # 2 + 3. Strip unsupported keys at this level.
+            return {k: walk(v) for k, v in node.items() if k not in STRIP_KEYS}
         if isinstance(node, list):
             return [walk(v) for v in node]
         return node

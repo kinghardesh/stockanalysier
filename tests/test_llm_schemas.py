@@ -30,7 +30,36 @@ def test_clean_schema_strips_defs_and_title_recursively():
     raw = _Wrapper.model_json_schema()
     assert "$defs" in raw
     cleaned = clean_schema_for_gemini(raw)
-    _walk_assert_keys_absent(cleaned, {"$defs", "definitions", "title"})
+    _walk_assert_keys_absent(cleaned, {"$defs", "definitions", "title", "additionalProperties"})
+
+
+def test_clean_schema_strips_additional_properties():
+    """Pydantic with extra='forbid' emits additionalProperties:false at every nesting
+    level. Gemini's response_schema rejects this. Regression: any return of this key
+    breaks the LLM pipeline silently (proposals stop being generated)."""
+    raw = LLMTradeProposal.model_json_schema()
+    cleaned = clean_schema_for_gemini(raw)
+    _walk_assert_keys_absent(cleaned, {"additionalProperties"})
+
+
+def test_clean_schema_flattens_optional_anyof():
+    """Optional[X] becomes anyOf:[X, {type:null}] in Pydantic JSON Schema.
+    Gemini rejects anyOf. The cleaner must flatten to the non-null variant."""
+    from pydantic import BaseModel
+    from typing import Optional
+
+    class _OptModel(BaseModel):
+        maybe: Optional[float] = None
+
+    raw = _OptModel.model_json_schema()
+    # Pydantic emits anyOf for Optional fields
+    field = raw["properties"]["maybe"]
+    assert "anyOf" in field, "Pydantic schema shape changed; update this test"
+
+    cleaned = clean_schema_for_gemini(raw)
+    cleaned_field = cleaned["properties"]["maybe"]
+    assert "anyOf" not in cleaned_field
+    assert cleaned_field.get("type") == "number"
 
 
 def test_clean_schema_inlines_refs():
