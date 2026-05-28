@@ -6,7 +6,9 @@ from app.core.config import settings
 
 
 class LLMTradeProposal(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # protected_namespaces=() silences Pydantic v2's warning about the
+    # `model_used` field colliding with its reserved `model_` namespace.
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     ticker: str
     side: Literal["buy", "sell"]
