@@ -9,7 +9,9 @@ from app.models.enums import ProposalSide, ProposalTier, TradeSleeve
 
 
 class ProposalIn(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # protected_namespaces=() silences Pydantic v2's warning about the
+    # `model_used` field colliding with its reserved `model_` namespace.
+    model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
     signal_id: UUID
     ticker: str

@@ -15,6 +15,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -91,8 +92,10 @@ class MeanReversionSignalEngine:
     def _bars(self, symbol: str) -> pd.DataFrame:
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=LOOKBACK_DAYS)
+        # IEX feed: free paper tier doesn't permit SIP. See trend.py for context.
         req = StockBarsRequest(
-            symbol_or_symbols=symbol, timeframe=TimeFrame.Day, start=start, end=end,
+            symbol_or_symbols=symbol, timeframe=TimeFrame.Day,
+            start=start, end=end, feed=DataFeed.IEX,
         )
         df = self.data_client.get_stock_bars(req).df
         if df.empty:

@@ -4,6 +4,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -46,7 +47,14 @@ class TrendSignalEngine:
     def _bars(self, symbol: str, lookback_days: int = 365) -> pd.DataFrame:
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=lookback_days)
-        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, start=start, end=end)
+        # IEX feed is the only one available on Alpaca's free paper tier. SIP
+        # (the default) returns 403: "subscription does not permit querying
+        # recent SIP data". IEX gives daily bars going back years — fine for
+        # 50/200 SMA crossover.
+        req = StockBarsRequest(
+            symbol_or_symbols=symbol, timeframe=TimeFrame.Day,
+            start=start, end=end, feed=DataFeed.IEX,
+        )
         df = self.data_client.get_stock_bars(req).df
         if df.empty:
             return df

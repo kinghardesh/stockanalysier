@@ -58,7 +58,13 @@ def clean_schema_for_gemini(schema: dict) -> dict:
     add the offending key to the strip set below.
     """
     defs = {**(schema.get("$defs", {}) or {}), **(schema.get("definitions", {}) or {})}
-    STRIP_KEYS = {"$defs", "definitions", "title", "additionalProperties"}
+    # Keys Gemini's response_schema validator rejects. Each time we discover
+    # a new one in the wild, add it here. minimum/maximum are kept (Gemini
+    # accepts them); only the JSON-Schema-Draft-2020 "exclusive*" form is rejected.
+    STRIP_KEYS = {
+        "$defs", "definitions", "title", "additionalProperties",
+        "exclusiveMinimum", "exclusiveMaximum",
+    }
 
     def walk(node):
         if isinstance(node, dict):
