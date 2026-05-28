@@ -58,12 +58,15 @@ def clean_schema_for_gemini(schema: dict) -> dict:
     add the offending key to the strip set below.
     """
     defs = {**(schema.get("$defs", {}) or {}), **(schema.get("definitions", {}) or {})}
-    # Keys Gemini's response_schema validator rejects. Each time we discover
-    # a new one in the wild, add it here. minimum/maximum are kept (Gemini
-    # accepts them); only the JSON-Schema-Draft-2020 "exclusive*" form is rejected.
+    # Keys Gemini's response_schema validator rejects. Empirically discovered;
+    # add to this set every time a new failure shows up in the worker logs.
+    # We rely on Pydantic to enforce numeric bounds AFTER the LLM responds —
+    # Gemini's lack of in-schema enforcement just means more validation
+    # failures on the retry path, which still beats silent acceptance.
     STRIP_KEYS = {
         "$defs", "definitions", "title", "additionalProperties",
         "exclusiveMinimum", "exclusiveMaximum",
+        "minimum", "maximum",
     }
 
     def walk(node):
