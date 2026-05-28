@@ -69,6 +69,12 @@ def clean_schema_for_gemini(schema: dict) -> dict:
         "$defs", "definitions", "title", "additionalProperties",
         "exclusiveMinimum", "exclusiveMaximum",
         "minimum", "maximum",
+        # Pydantic emits `default: <value>` for every field with a default
+        # (Optional fields, list defaults, etc.). Gemini rejects it.
+        "default",
+        # Less common but safe to defensively strip — discovered as Gemini
+        # rejections in other projects.
+        "examples", "pattern", "format",
     }
 
     def walk(node):
