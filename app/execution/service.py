@@ -13,8 +13,7 @@ from uuid import UUID
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
 from alpaca.trading.requests import (
-    LimitOrderRequest, MarketOrderRequest,
-    StopLossRequest, TakeProfitRequest,
+    MarketOrderRequest, StopLossRequest, TakeProfitRequest,
 )
 from sqlalchemy import select
 
@@ -22,6 +21,7 @@ from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models import Trade, TradeProposal
 from app.models.enums import ProposalSide, TradeStatus
+from app.risk.sizing import reconcile_bracket
 from app.schemas import SizedProposal
 
 log = logging.getLogger(__name__)
@@ -113,36 +113,29 @@ class ExecutionService:
         client = self._trading()
         side = OrderSide.BUY if proposal.side == ProposalSide.buy else OrderSide.SELL
 
-        stop_loss = StopLossRequest(stop_price=float(proposal.stop_price))
-        take_profit = (
-            TakeProfitRequest(limit_price=float(proposal.target_price))
-            if proposal.target_price is not None else None
+        # Reconcile LLM-proposed stop/target against the live entry so the bracket
+        # is valid (stop below + target above entry for a buy; reversed for sell).
+        # The LLM proposes prices blind to the live quote, so these can land on
+        # the wrong side and Alpaca rejects the whole bracket with a 422.
+        stop, target = reconcile_bracket(
+            proposal.side, proposal.entry_price, proposal.stop_price, proposal.target_price,
         )
 
-        if proposal.target_price is not None:
-            # Bracket order requires both legs. Use a limit entry near current price
-            # (the LLM/mechanical engine already chose entry_price as a reasonable level).
-            req = LimitOrderRequest(
-                symbol=proposal.ticker,
-                qty=proposal.qty,
-                side=side,
-                time_in_force=TimeInForce.DAY,
-                limit_price=float(proposal.entry_price),
-                order_class=OrderClass.BRACKET,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-            )
-        else:
-            # OTO (one-triggers-other) — market entry with a trailing stop only.
-            # Alpaca requires the protective leg even without a target.
-            req = MarketOrderRequest(
-                symbol=proposal.ticker,
-                qty=proposal.qty,
-                side=side,
-                time_in_force=TimeInForce.DAY,
-                order_class=OrderClass.OTO,
-                stop_loss=stop_loss,
-            )
+        # Market entry so the order fills immediately during RTH (a limit entry
+        # at last-trade price can sit unfilled). Bracket legs ride on the fill.
+        req = MarketOrderRequest(
+            symbol=proposal.ticker,
+            qty=proposal.qty,
+            side=side,
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET,
+            stop_loss=StopLossRequest(stop_price=float(stop)),
+            take_profit=TakeProfitRequest(limit_price=float(target)),
+        )
+        log.info(
+            "submitting %s %s qty=%d market-bracket stop=%s target=%s",
+            side, proposal.ticker, proposal.qty, stop, target,
+        )
         return client.submit_order(req)
 
     async def submit(self, proposal: SizedProposal) -> str:
