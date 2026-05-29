@@ -41,6 +41,21 @@ def test_sell_stop_below_entry_clamped():
     assert target == Decimal("90")
 
 
+def test_buy_stale_prices_clamped_to_live_entry():
+    # The real bug: AAPL at $310 live, but Gemini proposed $170 stop / $185
+    # target from stale training data. Both are absurd distances from entry.
+    stop, target = reconcile_bracket("buy", Decimal("310"), Decimal("170"), Decimal("185"))
+    assert stop == Decimal("300.70")    # 310 * 0.97, NOT the stale 170
+    assert target == Decimal("325.50")  # 310 * 1.05, NOT the stale 185
+    assert stop < Decimal("310") < target
+
+
+def test_buy_stop_too_far_below_clamped():
+    # stop directionally correct (below entry) but 20% away -> clamp to 3%
+    stop, _ = reconcile_bracket("buy", Decimal("100"), Decimal("80"), Decimal("105"))
+    assert stop == Decimal("97.00")
+
+
 def test_none_levels_get_defaults():
     stop, target = reconcile_bracket("buy", Decimal("200"), None, None)
     assert stop == Decimal("194.00")   # 200 * 0.97

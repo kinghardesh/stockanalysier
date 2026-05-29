@@ -7,6 +7,11 @@ RISK_PER_TRADE_PCT = Decimal("0.01")
 # Fallback bracket distances when the LLM's proposed levels are unusable.
 STOP_DISTANCE_PCT = Decimal("0.03")    # 3% protective stop
 TARGET_DISTANCE_PCT = Decimal("0.05")  # 5% take-profit
+# Sanity bands — an LLM-proposed level outside these distances from the live
+# entry is treated as garbage (the model often hallucinates prices from stale
+# training data, e.g. proposing a $170 stop on a stock now trading at $310).
+MAX_STOP_DISTANCE_PCT = Decimal("0.15")    # reject stops > 15% from entry
+MAX_TARGET_DISTANCE_PCT = Decimal("0.30")  # reject targets > 30% from entry
 
 
 def size_position(equity: Decimal, entry: Decimal, stop: Decimal) -> int:
@@ -35,13 +40,19 @@ def reconcile_bracket(side, entry, stop, target) -> tuple[Decimal, Decimal]:
     cents = Decimal("0.01")
 
     if side_str == "buy":
-        if stop is None or stop >= entry:
+        # Valid buy stop: below entry, but no more than MAX_STOP_DISTANCE_PCT away.
+        stop_floor = entry * (Decimal(1) - MAX_STOP_DISTANCE_PCT)
+        if stop is None or not (stop_floor <= stop < entry):
             stop = (entry * (Decimal(1) - STOP_DISTANCE_PCT)).quantize(cents)
-        if target is None or target <= entry:
+        # Valid buy target: above entry, but no more than MAX_TARGET_DISTANCE_PCT away.
+        target_ceil = entry * (Decimal(1) + MAX_TARGET_DISTANCE_PCT)
+        if target is None or not (entry < target <= target_ceil):
             target = (entry * (Decimal(1) + TARGET_DISTANCE_PCT)).quantize(cents)
     else:  # sell / short: stop above entry, target below
-        if stop is None or stop <= entry:
+        stop_ceil = entry * (Decimal(1) + MAX_STOP_DISTANCE_PCT)
+        if stop is None or not (entry < stop <= stop_ceil):
             stop = (entry * (Decimal(1) + STOP_DISTANCE_PCT)).quantize(cents)
-        if target is None or target >= entry:
+        target_floor = entry * (Decimal(1) - MAX_TARGET_DISTANCE_PCT)
+        if target is None or not (target_floor <= target < entry):
             target = (entry * (Decimal(1) - TARGET_DISTANCE_PCT)).quantize(cents)
     return stop, target

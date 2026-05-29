@@ -74,7 +74,8 @@ class LLMOrchestrator:
             return [None] * len(tickers)
 
         schema = llm_facing_news_batch_schema()
-        prompt = self._build_news_prompt(events, state, schema)
+        prices = self._fetch_prices(tickers)
+        prompt = self._build_news_prompt(events, state, schema, prices)
 
         def parse(raw: dict) -> list[LLMTradeProposal]:
             return [LLMTradeProposal(**p) for p in (raw.get("proposals") or [])]
@@ -102,7 +103,8 @@ class LLMOrchestrator:
             return None
 
         schema = llm_facing_filing_schema()
-        prompt = self._build_filing_prompt(event, state, schema)
+        prices = self._fetch_prices([event.ticker])
+        prompt = self._build_filing_prompt(event, state, schema, prices)
 
         def parse(raw: dict) -> Optional[LLMTradeProposal]:
             if raw.get("no_signal") is True:
@@ -194,7 +196,26 @@ class LLMOrchestrator:
                         proposal.ticker)
         return assessment
 
-    def _build_news_prompt(self, events: list[NewsEvent], state: dict, schema: dict) -> str:
+    def _fetch_prices(self, tickers: list[str]) -> dict[str, str]:
+        """Fetch live IEX prices so the LLM anchors stop/target to reality
+        instead of hallucinating levels from stale training data."""
+        from app.services.quotes import latest_trade_price
+        out: dict[str, str] = {}
+        for t in tickers:
+            try:
+                out[t] = f"{latest_trade_price(t):.2f}"
+            except Exception:
+                log.warning("live price unavailable for %s", t)
+        return out
+
+    @staticmethod
+    def _format_prices(prices: dict[str, str]) -> str:
+        if not prices:
+            return "unavailable (do not propose price-specific levels)"
+        return ", ".join(f"{t}=${p}" for t, p in prices.items())
+
+    def _build_news_prompt(self, events: list[NewsEvent], state: dict, schema: dict,
+                           prices: dict[str, str]) -> str:
         news_block = "\n".join(
             f"- event_id={e.event_id} ticker={e.ticker} source={e.source} "
             f"published={e.published_at or '?'} :: {e.title_sanitized}"
@@ -212,11 +233,13 @@ class LLMOrchestrator:
             kill_switch_status=state.get("kill_switch_status", "UNKNOWN"),
             open_positions=state.get("open_positions", "?"),
             recent_fills=state.get("recent_fills", "?"),
+            current_prices=self._format_prices(prices),
             news_block=news_block,
             schema_json=json.dumps(schema),
         )
 
-    def _build_filing_prompt(self, event: FilingEvent, state: dict, schema: dict) -> str:
+    def _build_filing_prompt(self, event: FilingEvent, state: dict, schema: dict,
+                             prices: dict[str, str]) -> str:
         return FILING_PROMPT_TEMPLATE.format(
             system_prompt=SYSTEM_PROMPT.format(
                 whitelist=", ".join(settings.whitelist_tickers)
@@ -229,6 +252,7 @@ class LLMOrchestrator:
             kill_switch_status=state.get("kill_switch_status", "UNKNOWN"),
             open_positions=state.get("open_positions", "?"),
             recent_fills=state.get("recent_fills", "?"),
+            current_prices=self._format_prices(prices),
             ticker=event.ticker,
             form_type=event.form_type,
             filed_at=event.filed_at,
