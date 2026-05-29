@@ -72,6 +72,11 @@ def clean_schema_for_gemini(schema: dict) -> dict:
         # Pydantic emits `default: <value>` for every field with a default
         # (Optional fields, list defaults, etc.). Gemini rejects it.
         "default",
+        # Gemini's protobuf Schema literally has no maxLength/minLength
+        # fields. Pydantic emits these for Field(max_length=...). Stripping
+        # them means Pydantic still enforces the bound on the response,
+        # but Gemini never sees the constraint.
+        "maxLength", "minLength",
         # Less common but safe to defensively strip — discovered as Gemini
         # rejections in other projects.
         "examples", "pattern", "format",
