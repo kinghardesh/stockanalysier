@@ -111,7 +111,9 @@ async def main():
                       CronTrigger(day_of_week="mon-fri", hour=16, minute=15, timezone=ET))
 
     # 24/7 intervals
-    scheduler.add_job(news_poll, IntervalTrigger(minutes=15))
+    # 20-min interval = 72 batched requests/day, comfortable headroom under
+    # NewsAPI's 100/day free-tier limit (one batched request per cycle).
+    scheduler.add_job(news_poll, IntervalTrigger(minutes=20))
     scheduler.add_job(filing_poll, IntervalTrigger(minutes=30))
     scheduler.add_job(expire_stale_tier3, IntervalTrigger(minutes=5))
 
