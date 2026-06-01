@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from decimal import Decimal
@@ -9,7 +10,7 @@ from app.core.redis import is_kill_switch_active, redis_client
 from app.execution import ExecutionService
 from app.llm.orchestrator import LLMOrchestrator, NewsEvent
 from app.models import Signal, TradeProposal
-from app.models.enums import ProposalSide, ProposalTier, SignalSource, TradeSleeve
+from app.models.enums import ProposalSide, ProposalTier, SignalSource, TimeHorizon, TradeSleeve
 from app.risk.decision import Approved
 from app.risk.engine import RiskEngine
 from app.risk.persistence import persist_decision
@@ -48,7 +49,11 @@ class NewsConsumer:
         if is_kill_switch_active():
             return 0
 
-        batch = redis_client.xreadgroup(
+        # Run the blocking long-poll read in a worker thread so the 30s block
+        # doesn't freeze the scheduler's event loop (which would delay every
+        # other timed job). The rest of run_once is already non-blocking.
+        batch = await asyncio.to_thread(
+            redis_client.xreadgroup,
             CONSUMER_GROUP, CONSUMER_NAME,
             {STREAM_NEWS: ">"},
             count=settings.llm_batch_size,
@@ -98,6 +103,7 @@ class NewsConsumer:
         return processed
 
     async def _process_proposal(self, proposal) -> None:
+        horizon = TimeHorizon(proposal.time_horizon) if proposal.time_horizon else None
         common = dict(
             ticker=proposal.ticker,
             side=ProposalSide(proposal.side),
@@ -108,6 +114,7 @@ class NewsConsumer:
             thesis=proposal.thesis,
             confidence=proposal.confidence,
             model_used=proposal.model_used,
+            time_horizon=horizon,
         )
 
         with SessionLocal() as db:
@@ -122,6 +129,10 @@ class NewsConsumer:
                     "invalidation_criteria": proposal.invalidation_criteria,
                     "time_horizon": proposal.time_horizon,
                     "model_used": proposal.model_used,
+                    "verifier_verdict": proposal.verifier_verdict,
+                    "verifier_model": proposal.verifier_model,
+                    "verifier_confidence": proposal.verifier_confidence,
+                    "verifier_reasoning": proposal.verifier_reasoning,
                 },
             )
             db.add(sig)
@@ -174,6 +185,8 @@ class NewsConsumer:
                 model_used=proposal.model_used,
                 tier=tier_enum,
                 sleeve=TradeSleeve(proposal.sleeve or "discretionary"),
+                time_horizon=horizon,
+                proposed_size_pct=Decimal(str(proposal.proposed_size_pct)),
             )
             decision = self.risk_engine.validate(proposal_in, state)
             persist_decision(db, row, decision)

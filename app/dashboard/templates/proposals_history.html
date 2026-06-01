@@ -22,6 +22,14 @@
       <input type="text" name="model_used" value="{{ filters.model_used }}" placeholder="gemini, ollama, mechanical_*"
              class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 w-44" />
     </label>
+    <label class="flex flex-col">
+      <span class="text-slate-500 mb-1">horizon</span>
+      <select name="horizon" class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5">
+        <option value="" {% if not filters.horizon %}selected{% endif %}>all</option>
+        <option value="short_term" {% if filters.horizon == 'short_term' %}selected{% endif %}>short-term</option>
+        <option value="long_term" {% if filters.horizon == 'long_term' %}selected{% endif %}>long-term</option>
+      </select>
+    </label>
     <label class="flex items-center gap-1.5">
       <input type="checkbox" name="rejected_only" value="true" {% if filters.rejected_only %}checked{% endif %} />
       <span>rejected only</span>
@@ -42,8 +50,10 @@
         <th class="px-3 py-2 text-left">created</th>
         <th class="px-3 py-2 text-left">ticker</th>
         <th class="px-3 py-2 text-left">side</th>
+        <th class="px-3 py-2 text-left">horizon</th>
         <th class="px-3 py-2 text-left">tier</th>
         <th class="px-3 py-2 text-left">model</th>
+        <th class="px-3 py-2 text-left">2nd opinion</th>
         <th class="px-3 py-2 text-right">conf</th>
         <th class="px-3 py-2 text-right">stop</th>
         <th class="px-3 py-2 text-right">target</th>
@@ -58,8 +68,30 @@
           <td class="px-3 py-2">
             <span class="text-xs uppercase {% if r.side == 'buy' %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ r.side }}</span>
           </td>
+          <td class="px-3 py-2">
+            {% if r.bucket == 'short_term' %}
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase bg-sky-900 text-sky-300">short</span>
+              <span class="text-[10px] text-slate-500 ml-1">{{ r.horizon }}</span>
+            {% elif r.bucket == 'long_term' %}
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase bg-violet-900 text-violet-300">long</span>
+              <span class="text-[10px] text-slate-500 ml-1">{{ r.horizon }}</span>
+            {% else %}
+              <span class="text-xs text-slate-600">&mdash;</span>
+            {% endif %}
+          </td>
           <td class="px-3 py-2 text-xs text-amber-300">{{ r.tier }}</td>
           <td class="px-3 py-2 text-xs text-slate-300">{{ r.model_used or '—' }}</td>
+          <td class="px-3 py-2 text-xs">
+            {% if r.verifier == 'agree' %}
+              <span class="text-emerald-300" title="GPT {{ r.verifier_model }} agreed ({{ r.verifier_conf }}/10): {{ r.verifier_reason }}">✓ agree</span>
+            {% elif r.verifier == 'disagree' %}
+              <span class="text-rose-300" title="GPT {{ r.verifier_model }} disagreed ({{ r.verifier_conf }}/10): {{ r.verifier_reason }}">✗ disagree</span>
+            {% elif r.verifier == 'error' %}
+              <span class="text-amber-400" title="verifier unavailable; original decision kept">! n/a</span>
+            {% else %}
+              <span class="text-slate-600">—</span>
+            {% endif %}
+          </td>
           <td class="px-3 py-2 text-right font-mono">{{ r.confidence }}</td>
           <td class="px-3 py-2 text-right font-mono">{% if r.stop %}${{ "%.2f"|format(r.stop) }}{% else %}—{% endif %}</td>
           <td class="px-3 py-2 text-right font-mono">{% if r.target %}${{ "%.2f"|format(r.target) }}{% else %}—{% endif %}</td>
@@ -72,7 +104,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="9" class="px-3 py-8 text-center text-slate-500">No proposals match these filters.</td></tr>
+        <tr><td colspan="11" class="px-3 py-8 text-center text-slate-500">No proposals match these filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>

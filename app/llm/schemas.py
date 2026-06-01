@@ -25,6 +25,12 @@ class LLMTradeProposal(BaseModel):
     model_used: Optional[str] = None
     tier: Optional[Literal["tier_1", "tier_2", "tier_3", "rejected_bear_case"]] = None
     sleeve: Literal["trend", "premium", "mean_reversion", "discretionary"] = "discretionary"
+    # GPT tie-breaker verdict (orchestrator-filled). verdict is one of
+    # "agree" / "disagree" / "error" / None (not run).
+    verifier_verdict: Optional[str] = None
+    verifier_model: Optional[str] = None
+    verifier_confidence: Optional[int] = None
+    verifier_reasoning: Optional[str] = None
 
     @field_validator("ticker")
     @classmethod
@@ -43,6 +49,15 @@ class BearCaseAssessment(BaseModel):
     strength: Literal["very_weak", "weak", "moderate", "strong", "very_strong"]
     reasoning: str = Field(max_length=500)
     key_risks: list[str] = Field(default_factory=list, max_length=5)
+
+
+class VerifierVerdict(BaseModel):
+    """Independent second-opinion verdict from the GPT tie-breaker."""
+    model_config = ConfigDict(extra="forbid")
+
+    agree: bool
+    confidence: int = Field(ge=1, le=10)
+    reasoning: str = Field(max_length=400)
 
 
 def clean_schema_for_gemini(schema: dict) -> dict:
@@ -121,7 +136,10 @@ def llm_facing_schema(model: type[BaseModel], strip_fields: Optional[list[str]] 
     return clean_schema_for_gemini(raw)
 
 
-_ORCH_FILLED = ["model_used", "tier", "sleeve"]
+_ORCH_FILLED = [
+    "model_used", "tier", "sleeve",
+    "verifier_verdict", "verifier_model", "verifier_confidence", "verifier_reasoning",
+]
 
 
 def llm_facing_news_batch_schema() -> dict:
@@ -147,3 +165,7 @@ def llm_facing_filing_schema() -> dict:
 
 def bear_case_schema() -> dict:
     return llm_facing_schema(BearCaseAssessment)
+
+
+def verifier_schema() -> dict:
+    return llm_facing_schema(VerifierVerdict)

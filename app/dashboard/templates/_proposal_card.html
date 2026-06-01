@@ -12,6 +12,11 @@
         <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase bg-amber-900 text-amber-300">
           {{ p.tier }}
         </span>
+        {% if p.bucket == 'short_term' %}
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase bg-sky-900 text-sky-300" title="{{ p.horizon }}">short</span>
+        {% elif p.bucket == 'long_term' %}
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase bg-violet-900 text-violet-300" title="{{ p.horizon }}">long</span>
+        {% endif %}
       </div>
       <div class="text-xs text-slate-500 mt-1">
         proposed {{ p.created_at }} &middot; {{ p.age_minutes }}m ago
@@ -41,6 +46,21 @@
       <dd class="font-mono">{% if p.target %}${{ "%.2f"|format(p.target) }}{% else %}&mdash;{% endif %}</dd>
     </div>
   </dl>
+
+  {% if p.verifier == 'disagree' %}
+    <div class="rounded border border-rose-800 bg-rose-950/40 px-3 py-2">
+      <div class="text-[10px] uppercase tracking-wide text-rose-300 font-semibold">
+        ⚠ GPT 2nd opinion disagreed{% if p.verifier_conf %} ({{ p.verifier_conf }}/10){% endif %}
+        {% if p.verifier_model %} &middot; {{ p.verifier_model }}{% endif %}
+      </div>
+      <p class="text-xs text-rose-200 mt-1">{{ p.verifier_reason }}</p>
+      <p class="text-[10px] text-slate-400 mt-1">Downgraded to Tier 3 for your review instead of auto-executing.</p>
+    </div>
+  {% elif p.verifier == 'agree' %}
+    <div class="text-[10px] text-emerald-300/80">
+      ✓ GPT 2nd opinion agreed{% if p.verifier_conf %} ({{ p.verifier_conf }}/10){% endif %}
+    </div>
+  {% endif %}
 
   <div>
     <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Thesis</div>

@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer,
     Numeric, String, Text, text,
 )
 from sqlalchemy import Enum as SAEnum
@@ -13,7 +13,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
 from app.models.enums import (
-    ProposalSide, ProposalTier, RiskEventType, SignalSource, TradeSleeve, TradeStatus,
+    ProposalSide, ProposalTier, RiskEventType, SignalSource, TimeHorizon,
+    TradeSleeve, TradeStatus,
 )
 
 
@@ -59,6 +60,11 @@ class TradeProposal(Base):
     model_used: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     tier: Mapped[ProposalTier] = mapped_column(
         SAEnum(ProposalTier, name="proposal_tier", create_type=False), nullable=False
+    )
+    # Intended hold duration proposed by the LLM. Nullable because rows created
+    # before migration 0004 (and mechanical signals that don't set it) have none.
+    time_horizon: Mapped[Optional[TimeHorizon]] = mapped_column(
+        SAEnum(TimeHorizon, name="time_horizon", create_type=False), nullable=True, index=True
     )
     rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -155,6 +161,79 @@ class DailySummary(Base):
     proposals_rejected: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class DailyBar(Base):
+    """Permanent daily OHLCV history per ticker — the long-term company record
+    used for future reference / backtesting. Upserted by the daily snapshot job.
+    """
+    __tablename__ = "daily_bars"
+    __table_args__ = (Index("ix_daily_bars_bar_date", "bar_date"),)
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    bar_date: Mapped[datetime] = mapped_column(Date, primary_key=True)
+    open: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    high: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    low: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    close: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    volume: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    trade_count: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    vwap: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class CompanyFundamentals(Base):
+    """Permanent latest-snapshot fundamentals per ticker — refreshed periodically
+    so the LLMs have company context (sector, valuation, earnings) to reason over.
+    """
+    __tablename__ = "company_fundamentals"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    sector: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    industry: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    market_cap: Mapped[Optional[Decimal]] = mapped_column(Numeric(24, 2), nullable=True)
+    pe_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4), nullable=True)
+    forward_pe: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4), nullable=True)
+    eps: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4), nullable=True)
+    dividend_yield: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 6), nullable=True)
+    beta: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4), nullable=True)
+    fifty_two_week_high: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    fifty_two_week_low: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    next_earnings_date: Mapped[Optional[datetime]] = mapped_column(Date, nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class MarketData(Base):
+    """Hot intraday market events (bars + trades) drained from the live stream.
+
+    Kept for `market_data_retention_days` (default 30); the nightly archive job
+    exports older rows to a compressed secondary store and prunes them here.
+    """
+    __tablename__ = "market_data"
+    __table_args__ = (Index("ix_market_data_ticker_time", "ticker", "event_time"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # 'bar' | 'trade'
+    event_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    open: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    high: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    low: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    close: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    volume: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"), index=True
     )
 
 

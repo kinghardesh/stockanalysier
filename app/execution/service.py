@@ -119,6 +119,7 @@ class ExecutionService:
         # the wrong side and Alpaca rejects the whole bracket with a 422.
         stop, target = reconcile_bracket(
             proposal.side, proposal.entry_price, proposal.stop_price, proposal.target_price,
+            horizon=proposal.time_horizon,
         )
 
         # Market entry so the order fills immediately during RTH (a limit entry
@@ -159,3 +160,26 @@ class ExecutionService:
         except Exception:
             log.exception("close_position failed for %s", ticker)
             return None
+
+    def list_positions(self) -> list[dict]:
+        """Return currently-open Alpaca positions as plain dicts.
+
+        Source of truth for "what is actually held right now" — the local
+        `positions` table is unused. Each dict carries ticker, signed qty
+        (negative for shorts) and average entry price.
+        """
+        client = self._trading()
+        out: list[dict] = []
+        for p in client.get_all_positions():
+            try:
+                out.append({
+                    "ticker": getattr(p, "symbol", None),
+                    "qty": Decimal(str(getattr(p, "qty", "0") or "0")),
+                    "avg_entry_price": Decimal(str(getattr(p, "avg_entry_price", "0") or "0")),
+                    "side": getattr(getattr(p, "side", None), "value", None)
+                            or str(getattr(p, "side", "") or ""),
+                    "unrealized_pl": Decimal(str(getattr(p, "unrealized_pl", "0") or "0")),
+                })
+            except Exception:
+                log.exception("failed to parse Alpaca position %r", p)
+        return out

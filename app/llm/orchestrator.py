@@ -8,15 +8,16 @@ from app.core.config import settings
 from app.core.redis import is_kill_switch_active
 from app.llm.prompts import (
     BEAR_CASE_PROMPT_TEMPLATE, FILING_PROMPT_TEMPLATE,
-    NEWS_PROMPT_TEMPLATE, SYSTEM_PROMPT,
+    NEWS_PROMPT_TEMPLATE, SYSTEM_PROMPT, VERIFIER_PROMPT_TEMPLATE,
 )
 from app.llm.providers.base import (
     LLMProvider, ProviderError, RateLimitError, SchemaValidationError,
 )
 from app.llm.rate_limiter import RedisRateLimiter
 from app.llm.schemas import (
-    BearCaseAssessment, LLMTradeProposal,
+    BearCaseAssessment, LLMTradeProposal, VerifierVerdict,
     bear_case_schema, llm_facing_filing_schema, llm_facing_news_batch_schema,
+    verifier_schema,
 )
 
 log = logging.getLogger(__name__)
@@ -52,10 +53,13 @@ class LLMOrchestrator:
         providers: list[LLMProvider],
         rate_limiter: RedisRateLimiter,
         account_state_provider: Callable[[], dict],
+        verifier: Optional[LLMProvider] = None,
     ):
         self.providers = providers
         self.rate_limiter = rate_limiter
         self.account_state_provider = account_state_provider
+        # Independent second-opinion model (GPT). Not in the generation chain.
+        self.verifier = verifier
         self._by_name = {p.name: p for p in providers}
 
     async def analyze_news_batch(
@@ -173,6 +177,65 @@ class LLMOrchestrator:
                          assessment.strength, proposal.ticker)
                 return
         proposal.tier = tier
+        # GPT tie-breaker: a second, independent opinion on borderline trades
+        # that would otherwise auto-execute. May downgrade tier to tier_3.
+        await self._gpt_tiebreaker(proposal)
+
+    def _verifier_eligible(self, proposal: LLMTradeProposal) -> bool:
+        if self.verifier is None or not settings.gpt_verifier_enabled:
+            return False
+        # Only proposals that would auto-execute, and only when borderline by
+        # confidence. tier_3 already goes to a human; rejected ones are dead.
+        if proposal.tier not in ("tier_1", "tier_2"):
+            return False
+        return proposal.confidence <= settings.gpt_verifier_confidence_ceiling
+
+    async def _gpt_tiebreaker(self, proposal: LLMTradeProposal) -> None:
+        if not self._verifier_eligible(proposal):
+            return
+        verdict = await self._verify(proposal)
+        if verdict is None:
+            # Resilient: a verifier failure must never block the pipeline; the
+            # original decision stands, flagged so it's visible downstream.
+            proposal.verifier_verdict = "error"
+            proposal.verifier_model = getattr(self.verifier, "model", self.verifier.name)
+            return
+        proposal.verifier_verdict = "agree" if verdict.agree else "disagree"
+        proposal.verifier_model = getattr(self.verifier, "model", self.verifier.name)
+        proposal.verifier_confidence = verdict.confidence
+        proposal.verifier_reasoning = verdict.reasoning
+        if not verdict.agree:
+            log.info("GPT tie-breaker DISAGREED on %s (%s); downgrading %s -> tier_3",
+                     proposal.ticker, verdict.reasoning[:80], proposal.tier)
+            proposal.tier = "tier_3"
+
+    async def _verify(self, proposal: LLMTradeProposal) -> Optional[VerifierVerdict]:
+        schema = verifier_schema()
+        prompt = VERIFIER_PROMPT_TEMPLATE.format(
+            ticker=proposal.ticker,
+            side=proposal.side,
+            confidence=proposal.confidence,
+            proposed_size_pct=proposal.proposed_size_pct,
+            stop_price=proposal.stop_price,
+            target_price=proposal.target_price,
+            time_horizon=proposal.time_horizon,
+            thesis=proposal.thesis,
+            invalidation_criteria=proposal.invalidation_criteria,
+            schema_json=json.dumps(schema),
+        )
+        try:
+            raw = await self.verifier.generate_structured(
+                prompt, schema, timeout=settings.gpt_verifier_timeout_seconds,
+            )
+        except ProviderError as e:
+            log.warning("GPT verifier unavailable for %s: %s; keeping original decision",
+                        proposal.ticker, e)
+            return None
+        try:
+            return VerifierVerdict(**raw)
+        except (ValidationError, ValueError) as e:
+            log.warning("GPT verifier bad response for %s: %s", proposal.ticker, _format_error(e))
+            return None
 
     async def _devils_advocate(self, proposal: LLMTradeProposal) -> Optional[BearCaseAssessment]:
         schema = bear_case_schema()

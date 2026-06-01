@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import ProposalSide, ProposalTier, TradeSleeve
+from app.models.enums import ProposalSide, ProposalTier, TimeHorizon, TradeSleeve
 
 
 class ProposalIn(BaseModel):
@@ -24,6 +24,11 @@ class ProposalIn(BaseModel):
     model_used: Optional[str] = None
     tier: ProposalTier
     sleeve: TradeSleeve
+    time_horizon: Optional[TimeHorizon] = None
+    # The LLM's intended position size (fraction of equity). Used as an extra
+    # sizing cap so a small-intent idea can't balloon to the 20% per-ticker
+    # limit. None for mechanical signals (no proposed-size cap applied).
+    proposed_size_pct: Optional[Decimal] = None
 
 
 class SizedProposal(ProposalIn):

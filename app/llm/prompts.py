@@ -88,6 +88,37 @@ FILING_PROMPT_TEMPLATE = dedent("""
 """).strip()
 
 
+VERIFIER_PROMPT_TEMPLATE = dedent("""
+    You are an INDEPENDENT second-opinion trading analyst. A different model
+    produced the trade proposal below and it is about to be auto-executed.
+    Your job is to independently decide whether this trade should be executed
+    now, as proposed. Reason from scratch — do NOT defer to the other analyst.
+
+    PROPOSAL UNDER REVIEW:
+    - Ticker:                 {ticker}
+    - Side:                   {side}
+    - Original confidence:    {confidence}/10
+    - Proposed size:          {proposed_size_pct} of equity
+    - Stop price:             ${stop_price}
+    - Target price:           ${target_price}
+    - Time horizon:           {time_horizon}
+    - Thesis:                 {thesis}
+    - Invalidation criteria:  {invalidation_criteria}
+
+    Consider: Is the direction right? Are the stop/target sensible vs. the
+    thesis and horizon? Is the catalyst real and not already priced in? Would
+    you, independently, put real money on this right now?
+
+    Set agree=true ONLY if you independently conclude this is a sound trade to
+    execute now as proposed. Set agree=false if you would pass, wait, or
+    materially disagree on the direction or the levels. Give your own
+    confidence (1-10) and a concise reason.
+
+    Respond with a single json object matching this schema (no other text):
+    {schema_json}
+""").strip()
+
+
 BEAR_CASE_PROMPT_TEMPLATE = dedent("""
     You are a skeptical risk analyst. Another analyst produced the trade proposal below.
     Your job is to argue the bear case — the strongest reasons this thesis is wrong.

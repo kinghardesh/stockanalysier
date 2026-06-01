@@ -20,12 +20,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, not_, select
 
+from app.core.config import settings
 from app.core.db import SessionLocal
 from app.core.redis import (
     KILL_SWITCH_KEY, is_kill_switch_active, redis_client, set_kill_switch,
@@ -33,7 +35,9 @@ from app.core.redis import (
 from app.dashboard import auth as dash_auth
 from app.execution import ExecutionService
 from app.models import RiskEvent, Signal, Trade, TradeProposal
-from app.models.enums import ProposalSide, ProposalTier, TradeSleeve, TradeStatus
+from app.models.enums import (
+    ProposalSide, ProposalTier, TimeHorizon, TradeSleeve, TradeStatus, horizon_bucket,
+)
 from app.services.sleeve_map import sleeve_for_signal_source
 from app.risk.engine import RiskEngine
 from app.risk.history import DBTradeHistory
@@ -51,6 +55,8 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+ET = ZoneInfo("America/New_York")
 
 
 def _executor() -> ExecutionService:
@@ -138,6 +144,7 @@ def history(
     request: Request,
     tier: Optional[str] = Query(None),
     model_used: Optional[str] = Query(None),
+    horizon: Optional[str] = Query(None),
     rejected_only: bool = Query(False),
     limit: int = Query(50, ge=1, le=500),
     _=Depends(dash_auth.require_auth),
@@ -148,6 +155,11 @@ def history(
             stmt = stmt.where(TradeProposal.tier == ProposalTier(tier))
         if model_used:
             stmt = stmt.where(TradeProposal.model_used == model_used)
+        if horizon == "short_term":
+            stmt = stmt.where(TradeProposal.time_horizon.in_(
+                [TimeHorizon.intraday, TimeHorizon.swing]))
+        elif horizon == "long_term":
+            stmt = stmt.where(TradeProposal.time_horizon == TimeHorizon.position)
         if rejected_only:
             stmt = stmt.where(TradeProposal.rejected_reason.is_not(None))
         rows = db.execute(stmt).scalars().all()
@@ -157,6 +169,7 @@ def history(
         {
             "request": request, "proposals": items, "active": "history",
             "filters": {"tier": tier or "", "model_used": model_used or "",
+                        "horizon": horizon or "",
                         "rejected_only": rejected_only, "limit": limit},
         },
     )
@@ -179,6 +192,30 @@ def risk_events(request: Request, limit: int = Query(100, ge=1, le=500),
     return templates.TemplateResponse(
         "risk_events.html",
         {"request": request, "events": items, "active": "risk"},
+    )
+
+
+@router.get("/positions", response_class=HTMLResponse)
+def positions(request: Request, _=Depends(dash_auth.require_auth)):
+    """Read-only view of live Alpaca positions with horizon + time-to-exit."""
+    error = None
+    items: list[dict] = []
+    try:
+        live = _executor().list_positions()
+    except Exception:
+        log.exception("positions: could not list Alpaca positions")
+        live, error = [], "Could not reach Alpaca to list live positions."
+    if live:
+        with SessionLocal() as db:
+            items = [_position_context(db, pos) for pos in live]
+        items.sort(key=lambda r: (r["bucket"] != "short_term", r["ticker"]))
+    return templates.TemplateResponse(
+        "positions.html",
+        {
+            "request": request, "positions": items, "active": "positions", "error": error,
+            "swing_max_hold_days": settings.swing_max_hold_days,
+            "intraday_eod_close_et": settings.intraday_eod_close_et,
+        },
     )
 
 
@@ -288,6 +325,8 @@ async def _execute_approved(proposal_id: UUID) -> None:
             model_used=prop.model_used,
             tier=prop.tier,
             sleeve=sleeve,
+            time_horizon=prop.time_horizon,
+            proposed_size_pct=prop.proposed_size_pct,
         )
         risk = _new_risk_engine(db)
         decision = risk.validate(proposal_in, state)
@@ -296,6 +335,23 @@ async def _execute_approved(proposal_id: UUID) -> None:
             raise HTTPException(400, f"risk rejected: {decision.reason}")
 
     await _executor().submit_bracket(decision.proposal)
+
+
+def _verifier_info(p: TradeProposal) -> dict:
+    """Pull the GPT tie-breaker verdict off the originating signal (best-effort).
+
+    Stored in Signal.raw_data; accessed lazily within the request's session.
+    """
+    try:
+        raw = (p.signal.raw_data or {}) if p.signal else {}
+    except Exception:
+        raw = {}
+    return {
+        "verifier": raw.get("verifier_verdict") or "",
+        "verifier_model": raw.get("verifier_model") or "",
+        "verifier_conf": raw.get("verifier_confidence"),
+        "verifier_reason": raw.get("verifier_reasoning") or "",
+    }
 
 
 def _card_context(p: TradeProposal) -> dict:
@@ -311,8 +367,11 @@ def _card_context(p: TradeProposal) -> dict:
         "confidence": p.confidence,
         "tier": p.tier.value,
         "model_used": p.model_used,
+        "horizon": p.time_horizon.value if p.time_horizon else "",
+        "bucket": horizon_bucket(p.time_horizon),
         "created_at": p.created_at.isoformat(timespec="seconds"),
         "age_minutes": int(age.total_seconds() // 60),
+        **_verifier_info(p),
     }
 
 
@@ -328,6 +387,74 @@ def _row_context(p: TradeProposal) -> dict:
         "created_at": p.created_at.isoformat(timespec="seconds"),
         "stop": float(p.stop_price) if p.stop_price else None,
         "target": float(p.target_price) if p.target_price else None,
+        "horizon": p.time_horizon.value if p.time_horizon else "",
+        "bucket": horizon_bucket(p.time_horizon),
+        **_verifier_info(p),
+    }
+
+
+def _fmt_duration(td: timedelta) -> str:
+    total = max(0, int(td.total_seconds()))
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days > 0:
+        return f"{days}d {hours}h"
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _position_context(db, pos: dict) -> dict:
+    """Build a display row for one live Alpaca position.
+
+    Horizon + entry time come from the most recent live pipeline trade for the
+    ticker; time-to-exit is derived from the configured horizon thresholds.
+    """
+    ticker = (pos.get("ticker") or "").upper()
+    row = db.execute(
+        select(Trade, TradeProposal)
+        .join(TradeProposal, Trade.proposal_id == TradeProposal.id)
+        .where(
+            TradeProposal.ticker == ticker,
+            Trade.status.in_([TradeStatus.filled, TradeStatus.partial]),
+        )
+        .order_by(desc(Trade.opened_at))
+        .limit(1)
+    ).first()
+
+    horizon = row[1].time_horizon if row else None
+    opened_at = row[0].opened_at if row else None
+
+    time_held = "—"
+    if opened_at is not None:
+        time_held = _fmt_duration(datetime.now(timezone.utc) - opened_at)
+
+    if horizon == TimeHorizon.intraday:
+        time_to_exit = f"by {settings.intraday_eod_close_et} ET today"
+    elif horizon == TimeHorizon.swing and opened_at is not None:
+        days_held = (datetime.now(ET).date() - opened_at.astimezone(ET).date()).days
+        days_left = settings.swing_max_hold_days - days_held
+        time_to_exit = (
+            "due now (time stop)" if days_left <= 0
+            else f"~{days_left}d left (max {settings.swing_max_hold_days}d)"
+        )
+    elif horizon == TimeHorizon.position:
+        time_to_exit = "stop / target only"
+    else:
+        time_to_exit = "—"
+
+    return {
+        "ticker": ticker,
+        "qty": float(pos.get("qty") or 0),
+        "avg_entry_price": float(pos.get("avg_entry_price") or 0),
+        "unrealized_pl": float(pos.get("unrealized_pl") or 0),
+        "side": pos.get("side") or "",
+        "horizon": horizon.value if horizon else "",
+        "bucket": horizon_bucket(horizon),
+        "opened_at": opened_at.isoformat(timespec="seconds") if opened_at else None,
+        "time_held": time_held,
+        "time_to_exit": time_to_exit,
     }
 
 

@@ -25,6 +25,22 @@ class GeminiProvider(LLMProvider):
         self._model = genai.GenerativeModel(model_name)
 
     async def generate_structured(self, prompt: str, schema: dict, timeout: int = 30) -> dict:
+        # Retry transient rate limits (429) with linear backoff before giving up.
+        # The free tier throttles per-minute, so a short wait usually clears it;
+        # without this a news burst silently drops to "llm_unavailable".
+        attempts = max(1, settings.gemini_max_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._generate_once(prompt, schema, timeout)
+            except RateLimitError:
+                if attempt >= attempts:
+                    raise
+                wait = settings.gemini_retry_backoff_seconds * attempt
+                log.warning("gemini rate-limited (attempt %d/%d); retrying in %ds",
+                            attempt, attempts, wait)
+                await asyncio.sleep(wait)
+
+    async def _generate_once(self, prompt: str, schema: dict, timeout: int) -> dict:
         gen_config = genai.GenerationConfig(
             response_mime_type="application/json",
             response_schema=schema,

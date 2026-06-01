@@ -7,7 +7,7 @@ from app.core.redis import KILL_SWITCH_KEY, redis_client
 from app.models import RiskEvent, RiskEventType
 from app.risk.decision import Approved, Rejected, RiskDecision
 from app.risk.history import AccountState, TradeHistoryProvider
-from app.risk.sizing import MAX_SINGLE_TICKER_PCT, size_position
+from app.risk.sizing import MAX_SINGLE_TICKER_PCT, reconcile_bracket, size_position
 from app.risk.sleeve_caps import proposed_sleeve_breach
 from app.schemas import ProposalIn, SizedProposal
 
@@ -55,7 +55,17 @@ class RiskEngine:
 
         if proposal.stop_price is None:
             return self._reject(proposal, state, "stop_price required for sizing")
-        qty = size_position(state.equity, proposal.entry_price, proposal.stop_price)
+        # Reconcile the bracket up front so sizing uses the SAME stop the order
+        # will really use (a hallucinated far stop no longer distorts the size),
+        # and so the stored/submitted levels carry the min reward:risk fix.
+        recon_stop, recon_target = reconcile_bracket(
+            proposal.side, proposal.entry_price, proposal.stop_price,
+            proposal.target_price, horizon=proposal.time_horizon,
+        )
+        qty = size_position(
+            state.equity, proposal.entry_price, recon_stop,
+            max_position_pct=proposal.proposed_size_pct,
+        )
 
         existing = state.positions.get(proposal.ticker)
         existing_value = (existing.qty * existing.avg_entry_price) if existing else Decimal(0)
@@ -87,7 +97,10 @@ class RiskEngine:
         if self.history.had_stop_loss_within(proposal.ticker, since):
             return self._reject(proposal, state, "re-entry cooldown after recent loss")
 
-        sized = SizedProposal(**proposal.model_dump(), qty=qty)
+        sized = SizedProposal(
+            **{**proposal.model_dump(), "stop_price": recon_stop, "target_price": recon_target},
+            qty=qty,
+        )
         return Approved(proposal=sized)
 
     def _reject(self, proposal: ProposalIn, state: AccountState, reason: str) -> Rejected:

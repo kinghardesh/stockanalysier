@@ -17,9 +17,11 @@ def test_buy_stop_above_entry_clamped():
 
 
 def test_buy_target_below_entry_clamped():
+    # Target on the wrong side -> clamped to the 5% fallback, then widened by the
+    # 1.5:1 min reward:risk rule (stop is 5 below entry, so target >= 107.50).
     stop, target = reconcile_bracket("buy", Decimal("100"), Decimal("95"), Decimal("90"))
     assert stop == Decimal("95")
-    assert target == Decimal("105.00")
+    assert target == Decimal("107.50")
 
 
 def test_buy_both_wrong_side_both_clamped():
@@ -70,3 +72,32 @@ def test_result_always_brackets_entry_for_buy():
 def test_result_always_brackets_entry_for_sell():
     stop, target = reconcile_bracket("sell", Decimal("100"), Decimal("1"), Decimal("999"))
     assert target < Decimal("100") < stop
+
+
+def test_min_reward_risk_widens_too_close_target():
+    # Valid stop 5 below entry, valid target only 2 above -> R:R 0.4. The 1.5:1
+    # rule widens the target to entry + 1.5*5 = 107.50.
+    stop, target = reconcile_bracket("buy", Decimal("100"), Decimal("95"), Decimal("102"))
+    assert stop == Decimal("95")
+    assert target == Decimal("107.50")
+
+
+def test_short_term_horizon_clamps_wide_stop():
+    from app.models.enums import TimeHorizon
+    # 8.93% proposed stop: kept for unknown horizon (15% band) but clamped to the
+    # 3% fallback for an explicit short-term (swing) trade (8% band).
+    s_unknown, _ = reconcile_bracket("buy", Decimal("444.73"), Decimal("405"), Decimal("470"))
+    assert s_unknown == Decimal("405")
+    s_swing, _ = reconcile_bracket("buy", Decimal("444.73"), Decimal("405"), Decimal("470"),
+                                   horizon=TimeHorizon.swing)
+    assert s_swing == (Decimal("444.73") * Decimal("0.97")).quantize(Decimal("0.01"))
+
+
+def test_size_position_proposed_cap():
+    from app.risk.sizing import size_position
+    eq = Decimal("100000")
+    # Tight 1% stop -> risk cap allows a huge size, but a 2% proposed cap binds.
+    uncapped = size_position(eq, Decimal("100"), Decimal("99"))
+    capped = size_position(eq, Decimal("100"), Decimal("99"), max_position_pct=Decimal("0.02"))
+    assert capped == 20            # floor(100000 * 0.02 / 100)
+    assert capped < uncapped
