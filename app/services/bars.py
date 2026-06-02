@@ -45,6 +45,69 @@ def _int(v):
     return int(v) if _notna(v) else None
 
 
+def snapshot_universe_bars(lookback_days: int = 7) -> dict:
+    """Batched daily-bar collection for the curated universe (~500 names).
+
+    Fetches bars for up to 200 symbols per request (vs one request/symbol) and
+    bulk-upserts. Use a large lookback once to backfill history for screening,
+    then the small default for the daily incremental.
+    """
+    from app.services.universe import universe_symbols
+    syms = universe_symbols()
+    result = {"tickers": len(syms), "bars_upserted": 0, "errors": 0}
+    if not syms:
+        return result
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=lookback_days + 3)
+
+    rows: list[dict] = []
+    for i in range(0, len(syms), 200):
+        batch = syms[i:i + 200]
+        try:
+            df = _data_client().get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=batch, timeframe=TimeFrame.Day,
+                start=start, end=end, feed=DataFeed.IEX,
+            )).df
+        except Exception:
+            log.exception("universe bar batch fetch failed (%d syms)", len(batch))
+            result["errors"] += 1
+            continue
+        if df is None or df.empty:
+            continue
+        for rec in df.reset_index().to_dict("records"):
+            ts = rec.get("timestamp")
+            bar_date = ts.date() if hasattr(ts, "date") else None
+            o, h, l, c = _dec(rec.get("open")), _dec(rec.get("high")), _dec(rec.get("low")), _dec(rec.get("close"))
+            if bar_date is None or None in (o, h, l, c):
+                continue
+            rows.append(dict(
+                ticker=str(rec.get("symbol")).upper(), bar_date=bar_date,
+                open=o, high=h, low=l, close=c,
+                volume=_int(rec.get("volume")), trade_count=_int(rec.get("trade_count")),
+                vwap=_dec(rec.get("vwap")),
+            ))
+
+    if rows:
+        stmt = pg_insert(DailyBar)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["ticker", "bar_date"],
+            set_={k: stmt.excluded[k] for k in
+                  ("open", "high", "low", "close", "volume", "trade_count", "vwap")},
+        )
+        try:
+            with SessionLocal() as db:
+                for j in range(0, len(rows), 1000):
+                    chunk = rows[j:j + 1000]
+                    db.execute(stmt, chunk)
+                    result["bars_upserted"] += len(chunk)
+                db.commit()
+        except Exception:
+            log.exception("universe bar upsert failed")
+            result["errors"] += 1
+    log.info("snapshot_universe_bars: %s", result)
+    return result
+
+
 def snapshot_daily_bars(tickers=None, lookback_days: int = 5) -> dict:
     tickers = list(tickers or WHITELIST)
     result = {"tickers": len(tickers), "bars_upserted": 0, "errors": 0}

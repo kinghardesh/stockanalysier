@@ -95,5 +95,20 @@ class Settings(BaseSettings):
     # sector (from SECTOR_MAP) + 52-week range (from our own daily_bars).
     finnhub_api_key: str = ""
 
+    # Curated scan/trade universe: the top-N most liquid names (by dollar volume)
+    # filtered from the full Alpaca asset list. Mechanical screening + LLM
+    # deep-dives operate over this set instead of just the whitelist.
+    universe_size: int = 500
+    universe_exchanges: list[str] = Field(default_factory=lambda: ["NASDAQ", "NYSE", "ARCA"])
+
+    # Mechanical screener over the universe -> ranked buy candidates.
+    screen_min_history: int = 60          # min daily bars to evaluate a name
+    screen_rsi_oversold: float = 35.0     # mean-reversion: RSI below this (in an uptrend)
+    screen_rsi_overbought: float = 75.0   # momentum: skip parabolic names above this RSI
+    screen_top_n: int = 20                # how many top candidates the LLM deep-dives (Phase 3)
+    screen_execution_mode: str = "shadow"  # shadow (log only) | auto | approve
+    screen_min_confidence: int = 7         # min LLM confidence to act on a candidate
+    max_open_positions: int = 25          # portfolio cap (Phase 4)
+
 
 settings = Settings()

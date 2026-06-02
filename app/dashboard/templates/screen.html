@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Screen &middot; Trading Agent{% endblock %}
+{% block content %}
+<div class="mb-4 flex items-end justify-between gap-4 flex-wrap">
+  <div>
+    <h1 class="text-xl font-semibold">Screen &amp; Shadow Trades</h1>
+    <p class="text-sm text-slate-400">
+      Mechanical screen over the ~500-name universe, then the LLM-vetted would-be trades.
+    </p>
+  </div>
+  <div class="flex items-center gap-2 text-xs">
+    <span class="px-2 py-1 rounded bg-slate-800">mode:
+      <span class="{% if exec_mode == 'shadow' %}text-amber-300{% else %}text-emerald-300{% endif %} font-semibold">{{ exec_mode }}</span>
+    </span>
+    <button hx-get="/dashboard/screen" hx-target="body" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700">Refresh</button>
+  </div>
+</div>
+
+<!-- Shadow / would-be trades -->
+<div class="mb-2 flex items-center gap-3">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-300">Would-be trades</h2>
+  <span class="text-xs text-slate-500">{{ shadow_date }} &middot; {{ would_buy }} would buy</span>
+  {% if exec_mode == 'shadow' %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900 text-amber-300 uppercase">shadow — not executed</span>{% endif %}
+</div>
+<div class="overflow-x-auto rounded-lg border border-slate-800 mb-8">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-900 text-slate-400 text-xs uppercase">
+      <tr>
+        <th class="px-3 py-2 text-left">ticker</th>
+        <th class="px-3 py-2 text-left">signal</th>
+        <th class="px-3 py-2 text-left">decision</th>
+        <th class="px-3 py-2 text-right">qty</th>
+        <th class="px-3 py-2 text-right">entry</th>
+        <th class="px-3 py-2 text-right">stop</th>
+        <th class="px-3 py-2 text-right">target</th>
+        <th class="px-3 py-2 text-right">R:R</th>
+        <th class="px-3 py-2 text-right">conf</th>
+        <th class="px-3 py-2 text-left">thesis / reason</th>
+      </tr>
+    </thead>
+    <tbody class="bg-slate-950">
+      {% for s in shadows %}
+        <tr class="border-t border-slate-900 hover:bg-slate-900/50">
+          <td class="px-3 py-2 font-semibold">{{ s.ticker }}</td>
+          <td class="px-3 py-2 text-xs text-slate-400">{{ s.signal }}</td>
+          <td class="px-3 py-2">
+            {% if s.decision == 'would_buy' %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900 text-emerald-300 uppercase">would buy</span>
+            {% elif s.decision == 'llm_skip' %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">llm skip</span>
+            {% elif s.decision == 'risk_reject' %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-900/50 text-rose-300 uppercase">risk reject</span>
+            {% else %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 uppercase">{{ s.decision }}</span>{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right font-mono">{{ s.qty if s.qty is not none else '—' }}</td>
+          <td class="px-3 py-2 text-right font-mono">{% if s.entry %}${{ "%.2f"|format(s.entry) }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right font-mono">{% if s.stop %}${{ "%.2f"|format(s.stop) }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right font-mono">{% if s.target %}${{ "%.2f"|format(s.target) }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right font-mono {% if s.rr and s.rr >= 1.5 %}text-emerald-400{% endif %}">{{ s.rr if s.rr else '—' }}</td>
+          <td class="px-3 py-2 text-right font-mono">{{ s.confidence if s.confidence is not none else '—' }}</td>
+          <td class="px-3 py-2 text-xs text-slate-400">{{ s.thesis or s.reason or '' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="10" class="px-3 py-8 text-center text-slate-500">No shadow trades yet — runs daily at 17:00 ET after the screen.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Ranked screen candidates -->
+<div class="mb-2 flex items-center gap-3">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-300">Screen candidates</h2>
+  <span class="text-xs text-slate-500">{{ cand_date }} &middot; top {{ candidates|length }} of universe</span>
+</div>
+<div class="overflow-x-auto rounded-lg border border-slate-800">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-900 text-slate-400 text-xs uppercase">
+      <tr>
+        <th class="px-3 py-2 text-right">#</th>
+        <th class="px-3 py-2 text-left">ticker</th>
+        <th class="px-3 py-2 text-left">signal</th>
+        <th class="px-3 py-2 text-right">score</th>
+        <th class="px-3 py-2 text-right">close</th>
+        <th class="px-3 py-2 text-right">rsi</th>
+        <th class="px-3 py-2 text-right">sma50</th>
+        <th class="px-3 py-2 text-right">sma200</th>
+      </tr>
+    </thead>
+    <tbody class="bg-slate-950">
+      {% for c in candidates %}
+        <tr class="border-t border-slate-900 hover:bg-slate-900/50">
+          <td class="px-3 py-2 text-right font-mono text-slate-500">{{ c.rank }}</td>
+          <td class="px-3 py-2 font-semibold">{{ c.ticker }}</td>
+          <td class="px-3 py-2">
+            {% if c.signal == 'momentum' %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-sky-900 text-sky-300 uppercase">momentum</span>
+            {% else %}<span class="text-[10px] px-1.5 py-0.5 rounded bg-violet-900 text-violet-300 uppercase">mean-rev</span>{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right font-mono">{{ "%.1f"|format(c.score) if c.score is not none else '—' }}</td>
+          <td class="px-3 py-2 text-right font-mono">{% if c.close %}${{ "%.2f"|format(c.close) }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right font-mono {% if c.rsi and c.rsi >= 70 %}text-amber-400{% endif %}">{{ "%.0f"|format(c.rsi) if c.rsi is not none else '—' }}</td>
+          <td class="px-3 py-2 text-right font-mono text-slate-400">{% if c.sma50 %}${{ "%.2f"|format(c.sma50) }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right font-mono text-slate-400">{% if c.sma200 %}${{ "%.2f"|format(c.sma200) }}{% else %}—{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="px-3 py-8 text-center text-slate-500">No screen candidates yet — runs daily at 16:50 ET.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

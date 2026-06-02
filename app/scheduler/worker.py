@@ -29,7 +29,11 @@ from app.scheduler import expire_stale as expire_module
 from app.scheduler import horizon_exit as horizon_exit_module
 from app.scheduler import stop_guard as stop_guard_module
 from app.scheduler.jobs import ET, is_trading_day, trading_day_only, with_kill_switch
-from app.services.bars import snapshot_daily_bars
+from app.services.assets import sync_assets
+from app.services.universe import select_universe
+from app.services.bars import snapshot_daily_bars, snapshot_universe_bars
+from app.signals.screener import run_screen
+from app.signals.candidate_pipeline import run_candidate_pipeline
 from app.services.equity import snapshot_sod_equity
 from app.services.fundamentals import refresh_fundamentals
 from app.signals.mean_reversion import MeanReversionSignalEngine
@@ -121,6 +125,26 @@ async def fundamentals_job():
     log.info("fundamentals_job: %s", summary)
 
 
+async def assets_sync_job():
+    summary = await asyncio.to_thread(sync_assets)
+    log.info("assets_sync_job: %s", summary)
+
+
+async def universe_select_job():
+    summary = await asyncio.to_thread(select_universe)
+    log.info("universe_select_job: %s", summary)
+
+
+async def universe_bars_job():
+    summary = await asyncio.to_thread(snapshot_universe_bars)
+    log.info("universe_bars_job: %s", summary)
+
+
+async def screen_job():
+    summary = await asyncio.to_thread(run_screen)
+    log.info("screen_job: %s", summary)
+
+
 async def archive_market_data_job():
     summary = await asyncio.to_thread(archive_module.run_once)
     log.info("archive_market_data_job: %s", summary)
@@ -173,6 +197,17 @@ async def main():
                       CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=ET))
     scheduler.add_job(fundamentals_job,
                       CronTrigger(day_of_week="sun", hour=6, minute=0, timezone=ET))
+    # Full tradable universe — refreshed daily pre-market (changes slowly).
+    scheduler.add_job(assets_sync_job,
+                      CronTrigger(hour=7, minute=0, timezone=ET))
+    # Re-rank the curated liquid scan universe weekly (liquidity shifts slowly).
+    scheduler.add_job(universe_select_job,
+                      CronTrigger(day_of_week="sun", hour=8, minute=0, timezone=ET))
+    # After the close: refresh universe bars, then run the mechanical screen.
+    scheduler.add_job(universe_bars_job,
+                      CronTrigger(day_of_week="mon-fri", hour=16, minute=35, timezone=ET))
+    scheduler.add_job(screen_job,
+                      CronTrigger(day_of_week="mon-fri", hour=16, minute=50, timezone=ET))
     scheduler.add_job(archive_market_data_job,
                       CronTrigger(hour=2, minute=0, timezone=ET))
 
@@ -248,6 +283,16 @@ async def main():
                       IntervalTrigger(seconds=2),
                       id="market_data_consumer", max_instances=1, coalesce=True)
 
+    # Phase 3: after the daily screen, run the top candidates through the LLM
+    # and log the would-be trades (shadow mode). Needs the orchestrator.
+    async def candidate_pipeline_job():
+        summary = await run_candidate_pipeline(orchestrator)
+        log.info("candidate_pipeline_job: %s", summary)
+
+    scheduler.add_job(candidate_pipeline_job,
+                      CronTrigger(day_of_week="mon-fri", hour=17, minute=0, timezone=ET),
+                      id="candidate_pipeline", max_instances=1, coalesce=True)
+
     # Long-running background streams
     market_stream = AlpacaMarketStream(symbols=WHITELIST + ["SPY", "QQQ", "IWM"])
     order_stream = AlpacaOrderStream()
@@ -267,6 +312,26 @@ async def main():
             log.info("startup: SOD equity baseline was missing; snapshotted to recover")
     except Exception:
         log.exception("startup SOD snapshot check failed")
+
+    # Populate the tradable-universe table on first boot if it's empty.
+    try:
+        from sqlalchemy import func as _func, select as _select
+        from app.core.db import SessionLocal as _SL
+        from app.models import Asset as _Asset
+        with _SL() as _db:
+            _n = _db.execute(_select(_func.count()).select_from(_Asset)).scalar()
+        if not _n:
+            log.info("startup: assets universe empty; syncing from Alpaca")
+            await asyncio.to_thread(sync_assets)
+        # Select the curated liquid universe if it hasn't been picked yet.
+        with _SL() as _db:
+            _u = _db.execute(_select(_func.count()).select_from(_Asset)
+                             .where(_Asset.in_universe.is_(True))).scalar()
+        if not _u:
+            log.info("startup: scan universe not selected; ranking now")
+            await asyncio.to_thread(select_universe)
+    except Exception:
+        log.exception("startup assets/universe sync check failed")
 
     scheduler.start()
     log.info("scheduler started with %d providers", len(providers))

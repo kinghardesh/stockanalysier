@@ -51,6 +51,19 @@ class BearCaseAssessment(BaseModel):
     key_risks: list[str] = Field(default_factory=list, max_length=5)
 
 
+class CandidateAssessment(BaseModel):
+    """LLM verdict on a mechanically-screened buy candidate (not whitelist-gated:
+    the ticker is already a vetted universe member from the screen)."""
+    model_config = ConfigDict(extra="forbid")
+
+    buy: bool
+    confidence: int = Field(ge=1, le=10)
+    thesis: str = Field(max_length=500)
+    stop_price: Optional[float] = Field(default=None, gt=0)
+    target_price: Optional[float] = Field(default=None, gt=0)
+    time_horizon: Literal["intraday", "swing", "position"] = "swing"
+
+
 class VerifierVerdict(BaseModel):
     """Independent second-opinion verdict from the GPT tie-breaker."""
     model_config = ConfigDict(extra="forbid")
@@ -169,3 +182,7 @@ def bear_case_schema() -> dict:
 
 def verifier_schema() -> dict:
     return llm_facing_schema(VerifierVerdict)
+
+
+def candidate_assessment_schema() -> dict:
+    return llm_facing_schema(CandidateAssessment)

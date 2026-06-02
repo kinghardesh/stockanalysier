@@ -88,6 +88,34 @@ FILING_PROMPT_TEMPLATE = dedent("""
 """).strip()
 
 
+CANDIDATE_PROMPT_TEMPLATE = dedent("""
+    You are a disciplined trading analyst. A mechanical screen surfaced the stock
+    below as a {signal} setup. Decide whether it's a sound BUY right now, sized
+    for a risk-managed swing/position trade. Be selective — most screened names
+    are not worth buying; default to buy=false unless the setup is genuinely good.
+
+    CANDIDATE:
+    - Ticker:            {ticker}
+    - Setup:             {signal}
+    - Current price:     ${price}
+    - 50-day SMA:        {sma50}
+    - 200-day SMA:       {sma200}
+    - RSI(14):           {rsi}
+    - Sector:            {sector}
+    - Market cap:        {market_cap}
+    - P/E:               {pe}
+
+    Consider trend quality, whether it's over-extended, the sector backdrop, and
+    whether the risk/reward from here is favorable. If you buy, set a real
+    stop_price below the current price and a target above it (reward:risk >= 1.5),
+    and choose a time_horizon. If it's not a clean buy, return buy=false.
+
+    Treat all numbers as the live reality; do not use prices from memory. Respond
+    with a single json object matching this schema (no other text):
+    {schema_json}
+""").strip()
+
+
 VERIFIER_PROMPT_TEMPLATE = dedent("""
     You are an INDEPENDENT second-opinion trading analyst. A different model
     produced the trade proposal below and it is about to be auto-executed.

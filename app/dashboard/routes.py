@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, not_, select
+from sqlalchemy import desc, func, not_, select
 
 from app.core.config import settings
 from app.core.db import SessionLocal
@@ -34,7 +34,9 @@ from app.core.redis import (
 )
 from app.dashboard import auth as dash_auth
 from app.execution import ExecutionService
-from app.models import RiskEvent, Signal, Trade, TradeProposal
+from app.models import (
+    RiskEvent, ScreenCandidate, ShadowTrade, Signal, Trade, TradeProposal,
+)
 from app.models.enums import (
     ProposalSide, ProposalTier, TimeHorizon, TradeSleeve, TradeStatus, horizon_bucket,
 )
@@ -219,6 +221,39 @@ def positions(request: Request, _=Depends(dash_auth.require_auth)):
     )
 
 
+@router.get("/screen", response_class=HTMLResponse)
+def screen(request: Request, _=Depends(dash_auth.require_auth)):
+    """Daily mechanical screen candidates + the shadow (would-be) trades."""
+    with SessionLocal() as db:
+        cand_date = db.execute(select(func.max(ScreenCandidate.screen_date))).scalar()
+        candidates = []
+        if cand_date is not None:
+            candidates = db.execute(
+                select(ScreenCandidate).where(ScreenCandidate.screen_date == cand_date)
+                .order_by(ScreenCandidate.rank).limit(50)
+            ).scalars().all()
+        shadow_date = db.execute(select(func.max(ShadowTrade.screen_date))).scalar()
+        shadows = []
+        if shadow_date is not None:
+            shadows = db.execute(
+                select(ShadowTrade).where(ShadowTrade.screen_date == shadow_date)
+                .order_by(ShadowTrade.decision, ShadowTrade.ticker)
+            ).scalars().all()
+        cand_items = [_candidate_ctx(c) for c in candidates]
+        shadow_items = [_shadow_ctx(s) for s in shadows]
+    return templates.TemplateResponse(
+        "screen.html",
+        {
+            "request": request, "active": "screen",
+            "candidates": cand_items, "shadows": shadow_items,
+            "cand_date": str(cand_date) if cand_date else "—",
+            "shadow_date": str(shadow_date) if shadow_date else "—",
+            "exec_mode": settings.screen_execution_mode,
+            "would_buy": sum(1 for s in shadow_items if s["decision"] == "would_buy"),
+        },
+    )
+
+
 @router.get("/system", response_class=HTMLResponse)
 def system_panel(request: Request, _=Depends(dash_auth.require_auth)):
     return templates.TemplateResponse(
@@ -335,6 +370,32 @@ async def _execute_approved(proposal_id: UUID) -> None:
             raise HTTPException(400, f"risk rejected: {decision.reason}")
 
     await _executor().submit_bracket(decision.proposal)
+
+
+def _candidate_ctx(c: ScreenCandidate) -> dict:
+    return {
+        "rank": c.rank, "ticker": c.ticker, "signal": c.signal,
+        "score": float(c.score) if c.score is not None else None,
+        "close": float(c.close) if c.close else None,
+        "rsi": float(c.rsi) if c.rsi is not None else None,
+        "sma50": float(c.sma50) if c.sma50 else None,
+        "sma200": float(c.sma200) if c.sma200 else None,
+    }
+
+
+def _shadow_ctx(s: ShadowTrade) -> dict:
+    entry = float(s.entry) if s.entry else None
+    stop = float(s.stop) if s.stop else None
+    target = float(s.target) if s.target else None
+    rr = None
+    if entry and stop and target and entry != stop:
+        rr = round((target - entry) / (entry - stop), 2)
+    return {
+        "ticker": s.ticker, "signal": s.signal, "decision": s.decision,
+        "side": s.side, "qty": s.qty, "entry": entry, "stop": stop, "target": target,
+        "rr": rr, "tier": s.tier, "confidence": s.confidence, "horizon": s.horizon,
+        "thesis": s.thesis, "reason": s.reason,
+    }
 
 
 def _verifier_info(p: TradeProposal) -> dict:

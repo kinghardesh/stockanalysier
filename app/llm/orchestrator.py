@@ -7,7 +7,7 @@ from pydantic import BaseModel, ValidationError
 from app.core.config import settings
 from app.core.redis import is_kill_switch_active
 from app.llm.prompts import (
-    BEAR_CASE_PROMPT_TEMPLATE, FILING_PROMPT_TEMPLATE,
+    BEAR_CASE_PROMPT_TEMPLATE, CANDIDATE_PROMPT_TEMPLATE, FILING_PROMPT_TEMPLATE,
     NEWS_PROMPT_TEMPLATE, SYSTEM_PROMPT, VERIFIER_PROMPT_TEMPLATE,
 )
 from app.llm.providers.base import (
@@ -15,9 +15,9 @@ from app.llm.providers.base import (
 )
 from app.llm.rate_limiter import RedisRateLimiter
 from app.llm.schemas import (
-    BearCaseAssessment, LLMTradeProposal, VerifierVerdict,
-    bear_case_schema, llm_facing_filing_schema, llm_facing_news_batch_schema,
-    verifier_schema,
+    BearCaseAssessment, CandidateAssessment, LLMTradeProposal, VerifierVerdict,
+    bear_case_schema, candidate_assessment_schema, llm_facing_filing_schema,
+    llm_facing_news_batch_schema, verifier_schema,
 )
 
 log = logging.getLogger(__name__)
@@ -125,6 +125,31 @@ class LLMOrchestrator:
         proposal.sleeve = "discretionary"
         await self._assign_tier(proposal, source="filing", model_used=model_used)
         return proposal
+
+    async def analyze_candidate(self, candidate: dict) -> Optional[CandidateAssessment]:
+        """Vet a mechanically-screened buy candidate. Returns the assessment
+        (which may be buy=false) or None if all providers failed."""
+        if is_kill_switch_active():
+            return None
+        schema = candidate_assessment_schema()
+        prompt = CANDIDATE_PROMPT_TEMPLATE.format(
+            ticker=candidate.get("ticker"),
+            signal=candidate.get("signal"),
+            price=candidate.get("price"),
+            sma50=candidate.get("sma50"),
+            sma200=candidate.get("sma200"),
+            rsi=candidate.get("rsi"),
+            sector=candidate.get("sector") or "unknown",
+            market_cap=candidate.get("market_cap") or "n/a",
+            pe=candidate.get("pe") or "n/a",
+            schema_json=json.dumps(schema),
+        )
+
+        def parse(raw: dict) -> CandidateAssessment:
+            return CandidateAssessment(**raw)
+
+        assessment, _ = await self._call_with_retry(prompt, schema, parse)
+        return assessment
 
     async def _call_with_retry(self, prompt: str, schema: dict, parser):
         last_error = None

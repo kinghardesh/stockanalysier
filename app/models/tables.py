@@ -237,6 +237,86 @@ class MarketData(Base):
     )
 
 
+class Asset(Base):
+    """The full Alpaca-tradable universe (synced periodically). Symbol-level
+    reference metadata — what's tradable, on which exchange, shortable, etc."""
+    __tablename__ = "assets"
+    __table_args__ = (
+        Index("ix_assets_exchange", "exchange"),
+        Index("ix_assets_tradable", "tradable"),
+    )
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    exchange: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    asset_class: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    tradable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    marginable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    shortable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    easy_to_borrow: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    fractionable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # True for the curated liquid scan/trade universe (top ~N by dollar volume).
+    in_universe: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ScreenCandidate(Base):
+    """Output of the daily mechanical screen over the curated universe — a
+    ranked list of buy candidates the LLM deep-dive (Phase 3) draws from."""
+    __tablename__ = "screen_candidates"
+    __table_args__ = (Index("ix_screen_candidates_date_rank", "screen_date", "rank"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    screen_date: Mapped[datetime] = mapped_column(Date, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    signal: Mapped[str] = mapped_column(String(20), nullable=False)  # momentum | mean_reversion
+    score: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    close: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    sma50: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    sma200: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    rsi: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 4), nullable=True)
+    suggested_stop: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ShadowTrade(Base):
+    """What the screen->LLM->risk pipeline WOULD trade (shadow mode logs these
+    instead of submitting). Lets the strategy be validated before going live."""
+    __tablename__ = "shadow_trades"
+    __table_args__ = (Index("ix_shadow_trades_date", "screen_date"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    screen_date: Mapped[datetime] = mapped_column(Date, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    signal: Mapped[str] = mapped_column(String(20), nullable=False)
+    decision: Mapped[str] = mapped_column(String(24), nullable=False)  # would_buy|llm_skip|risk_reject|error
+    side: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    qty: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    entry: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    stop: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    target: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    tier: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    confidence: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    horizon: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    thesis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class SanitizationLog(Base):
     __tablename__ = "sanitization_log"
 
