@@ -23,6 +23,7 @@ from app.execution.service import _alpaca
 from app.models import (
     CompanyFundamentals, ScreenCandidate, ShadowTrade, Signal, TradeProposal,
 )
+from app.llm.schemas import CandidateAssessment
 from app.models.enums import (
     ProposalSide, ProposalTier, SignalSource, TimeHorizon, TradeSleeve,
 )
@@ -164,18 +165,28 @@ async def run_candidate_pipeline(orchestrator, executor: ExecutionService | None
                 result["errors"] += 1
                 continue
 
-            assessment = await orchestrator.analyze_candidate({
-                "ticker": c.ticker, "signal": c.signal, "price": f"{entry:.2f}",
-                "sma50": (f"{float(c.sma50):.2f}" if c.sma50 else "n/a"),
-                "sma200": (f"{float(c.sma200):.2f}" if c.sma200 else "n/a"),
-                "rsi": (f"{float(c.rsi):.1f}" if c.rsi else "n/a"),
-                "sector": fund["sector"], "market_cap": fund["market_cap"], "pe": fund["pe"],
-            })
-            if assessment is None:
-                shadow_rows.append(dict(ticker=c.ticker, signal=c.signal,
-                                        decision="error", reason="llm unavailable"))
-                result["errors"] += 1
-                continue
+            if settings.screen_llm_vet:
+                assessment = await orchestrator.analyze_candidate({
+                    "ticker": c.ticker, "signal": c.signal, "price": f"{entry:.2f}",
+                    "sma50": (f"{float(c.sma50):.2f}" if c.sma50 else "n/a"),
+                    "sma200": (f"{float(c.sma200):.2f}" if c.sma200 else "n/a"),
+                    "rsi": (f"{float(c.rsi):.1f}" if c.rsi else "n/a"),
+                    "sector": fund["sector"], "market_cap": fund["market_cap"], "pe": fund["pe"],
+                })
+                if assessment is None:
+                    shadow_rows.append(dict(ticker=c.ticker, signal=c.signal,
+                                            decision="error", reason="llm unavailable"))
+                    result["errors"] += 1
+                    continue
+            else:
+                # Mechanical-only: take the screen signal as the buy (no LLM gate).
+                assessment = CandidateAssessment(
+                    buy=True, confidence=settings.screen_min_confidence,
+                    thesis=f"mechanical {c.signal} signal (score {float(c.score):.1f})",
+                    stop_price=float(c.suggested_stop) if c.suggested_stop else None,
+                    target_price=None,
+                    time_horizon=("position" if c.signal == "momentum" else "swing"),
+                )
 
             if not assessment.buy or assessment.confidence < settings.screen_min_confidence:
                 shadow_rows.append(dict(

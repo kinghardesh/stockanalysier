@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     screen_rsi_overbought: float = 75.0   # momentum: skip parabolic names above this RSI
     screen_top_n: int = 20                # how many top candidates the LLM deep-dives (Phase 3)
     screen_execution_mode: str = "shadow"  # shadow (log only) | auto | approve
+    screen_llm_vet: bool = True            # False = mechanical-only (skip the LLM gate)
     screen_min_confidence: int = 7         # min LLM confidence to act on a candidate
     max_open_positions: int = 25          # portfolio cap (Phase 4)
 

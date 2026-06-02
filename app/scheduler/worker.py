@@ -283,14 +283,14 @@ async def main():
                       IntervalTrigger(seconds=2),
                       id="market_data_consumer", max_instances=1, coalesce=True)
 
-    # Phase 3: after the daily screen, run the top candidates through the LLM
-    # and log the would-be trades (shadow mode). Needs the orchestrator.
+    # Screen execution: act on the prior close's screen at the OPEN (9:30 ET) —
+    # that's when orders can actually fill. Shadow logs; auto buys (capped).
     async def candidate_pipeline_job():
         summary = await run_candidate_pipeline(orchestrator)
         log.info("candidate_pipeline_job: %s", summary)
 
     scheduler.add_job(candidate_pipeline_job,
-                      CronTrigger(day_of_week="mon-fri", hour=17, minute=0, timezone=ET),
+                      CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone=ET),
                       id="candidate_pipeline", max_instances=1, coalesce=True)
 
     # Long-running background streams
