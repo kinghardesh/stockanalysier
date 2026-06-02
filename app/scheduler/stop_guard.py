@@ -1,20 +1,19 @@
-"""Active protective-stop manager (self-healing, quantity-aware, trailing).
+"""Protective-stop guard (safe, coverage-only).
 
-Acts like a risk manager rather than a bystander:
+Guarantees every open position has an active stop covering its full size. It is
+deliberately CONSERVATIVE: it never cancels or replaces an existing stop — it
+only *adds* a GTC stop for shares that are uncovered AND free. This avoids the
+failure mode where cancelling a bracket's stop leg (whose shares are still held
+by the take-profit leg) leaves a position naked.
 
-  - QUANTITY-AWARE: every open position is covered by a stop for its FULL size,
-    not just "has a stop somewhere". Adding to a position re-arms the whole lot.
-  - TRAILING: on a winner the stop ratchets UP toward (current - horizon band)
-    to lock in profit. It only ever moves in the protective direction — never
-    loosened below an existing stop (or below the proposal's protective floor).
-  - SELF-HEALING: Alpaca bracket legs are TimeInForce.DAY and expire each
-    session; this re-arms a GTC stop so protection persists.
+Trailing (ratcheting stops up on winners) was removed because the cancel/replace
+it required is unsafe against bracket OCO legs; it can be reintroduced later via
+Alpaca-native trailing-stop orders, which the broker manages without cancels.
 
-Runs every `stop_guard_interval_minutes` through the trading day. NOT gated by
-the kill switch — open positions must stay protected even when new entries halt.
+Runs every stop_guard_interval_minutes through the trading day. NOT gated by the
+kill switch — open positions must stay protected even when entries are halted.
 """
 import logging
-import time
 from collections import defaultdict
 from decimal import Decimal
 
@@ -22,12 +21,11 @@ from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, StopOrderRequest
 from sqlalchemy import select
 
-from app.core.config import settings
 from app.core.db import SessionLocal
 from app.execution.service import _alpaca
 from app.models import Trade, TradeProposal
-from app.models.enums import LONG_TERM, TradeStatus, horizon_bucket
-from app.risk.sizing import LONG_STOP_DISTANCE_PCT, STOP_DISTANCE_PCT, reconcile_bracket
+from app.models.enums import TradeStatus
+from app.risk.sizing import reconcile_bracket
 
 log = logging.getLogger(__name__)
 _CENTS = Decimal("0.01")
@@ -51,31 +49,15 @@ def _intended_levels(sym: str):
         return row.stop_price, row.target_price, row.time_horizon
 
 
-def _trail_band(horizon) -> Decimal:
-    return LONG_STOP_DISTANCE_PCT if horizon_bucket(horizon) == LONG_TERM else STOP_DISTANCE_PCT
-
-
-
-
-def _desired_stop(is_long, entry, current, prop_stop, prop_tgt, horizon, existing_level):
-    """Ratcheted protective stop level — only ever moves in the protective
-    direction (longs: up; shorts: down) and never below the proposal's floor or
-    an existing stop. Validity vs. the current price is checked by the caller."""
-    protective = reconcile_bracket(
-        "buy" if is_long else "sell", entry, prop_stop, prop_tgt, horizon=horizon)[0]
-    band = _trail_band(horizon)
-    if is_long:
-        trail = current * (Decimal(1) - band) if settings.stop_guard_trail_enabled else Decimal(0)
-        desired = max(protective, trail, existing_level or Decimal(0))
-    else:
-        big = current * Decimal(100)
-        trail = current * (Decimal(1) + band) if settings.stop_guard_trail_enabled else big
-        desired = min(protective, trail, existing_level if existing_level is not None else big)
-    return desired.quantize(_CENTS)
+def _available(p) -> int:
+    try:
+        return abs(int(float(getattr(p, "qty_available", None) or p.qty)))
+    except Exception:
+        return abs(int(float(p.qty)))
 
 
 def run_once() -> dict:
-    result = {"positions": 0, "protected_ok": 0, "armed": 0, "trailed": 0, "errors": 0}
+    result = {"positions": 0, "protected_ok": 0, "armed": 0, "no_free_qty": 0, "errors": 0}
     client = _alpaca()
     try:
         positions = client.get_all_positions()
@@ -94,93 +76,49 @@ def run_once() -> dict:
         result["errors"] += 1
         return result
 
-    stops_by_sym = defaultdict(list)
+    stop_cover = defaultdict(int)
     for o in open_orders:
         if "stop" in str(o.type).lower():
-            stops_by_sym[o.symbol].append(o)
-
-    step_pct = Decimal(str(settings.stop_guard_min_trail_step_pct))
+            try:
+                stop_cover[o.symbol] += int(float(o.qty))
+            except Exception:
+                pass
 
     for p in positions:
         result["positions"] += 1
         sym = p.symbol
         try:
-            qty = int(float(p.qty))
-            if qty == 0:
-                continue
-            is_long = qty > 0
-            entry = Decimal(str(p.avg_entry_price))
-            # Alpaca validates stop prices against its OWN mark, so use that as
-            # the reference (the live IEX trade can diverge and get placements
-            # rejected as "stop must be below current price").
-            current = Decimal(str(p.current_price or p.avg_entry_price))
-
-            existing = stops_by_sym.get(sym, [])
-            covered = sum(int(float(o.qty)) for o in existing)
-            levels = [Decimal(str(o.stop_price)) for o in existing if o.stop_price is not None]
-            raw_level = (max(levels) if is_long else min(levels)) if levels else None
-            # Only ratchet against a stop on the CORRECT side of the price. An
-            # above-market (long) stop is anomalous/stuck and must be replaced,
-            # not ratcheted to.
-            valid_existing = None
-            if raw_level is not None and ((is_long and raw_level < current)
-                                          or (not is_long and raw_level > current)):
-                valid_existing = raw_level
-
-            prop_stop, prop_tgt, horizon = _intended_levels(sym)
-            desired = _desired_stop(is_long, entry, current, prop_stop, prop_tgt, horizon, valid_existing)
-            # Cap to a valid resting level: sell stop below the mark, buy above.
-            gap = current * _MIN_GAP
-            desired = (min(desired, current - gap) if is_long
-                       else max(desired, current + gap)).quantize(_CENTS)
-
-            need_qty = covered != abs(qty)
-            step = current * step_pct
-            if valid_existing is None:
-                need_trail = True                       # no valid stop -> establish one
-            elif is_long:
-                need_trail = desired > valid_existing + step
-            else:
-                need_trail = desired < valid_existing - step
-
-            if not need_qty and not need_trail:
+            qty = abs(int(float(p.qty)))
+            covered = stop_cover.get(sym, 0)
+            if covered >= qty:                      # already protected — never touch it
                 result["protected_ok"] += 1
                 continue
 
-            # Don't act while any of this symbol's orders are mid-flight
-            # (pending_cancel / pending_replace) — Alpaca rejects cancels and
-            # placements then. Defer to a later cycle once they settle.
-            if any("pending" in str(o.status).lower() for o in existing):
-                log.info("stop_guard: %s has pending orders; deferring", sym)
-                result["deferred"] = result.get("deferred", 0) + 1
+            free = _available(p)
+            place_qty = min(qty - covered, free)
+            if place_qty < 1:                       # uncovered shares are held by other orders
+                result["no_free_qty"] += 1
+                log.warning("stop_guard: %s uncovered (%d/%d) but no free qty to arm",
+                            sym, covered, qty)
                 continue
 
+            is_long = float(p.qty) > 0
+            entry = Decimal(str(p.avg_entry_price))
+            current = Decimal(str(p.current_price or p.avg_entry_price))
+            prop_stop, prop_tgt, horizon = _intended_levels(sym)
+            stop = reconcile_bracket(
+                "buy" if is_long else "sell", entry, prop_stop, prop_tgt, horizon=horizon)[0]
+            gap = current * _MIN_GAP
+            stop = (min(stop, current - gap) if is_long
+                    else max(stop, current + gap)).quantize(_CENTS)
             side = OrderSide.SELL if is_long else OrderSide.BUY
-            # Consolidate to exactly one full-size GTC stop: cancel every existing
-            # stop, wait for the shares to free up, then place one. (Replace can
-            # leave a lingering duplicate, over-covering the position.)
-            for o in existing:
-                try:
-                    client.cancel_order_by_id(o.id)
-                except Exception:
-                    log.warning("stop_guard: could not cancel %s stop %s", sym, str(o.id)[:8])
-            for _ in range(8):  # up to ~4s for cancels to clear
-                time.sleep(0.5)
-                still = [o for o in client.get_orders(filter=GetOrdersRequest(
-                    status=QueryOrderStatus.OPEN, limit=50, symbols=[sym]))
-                    if "stop" in str(o.type).lower()]
-                if not still:
-                    break
-            client.submit_order(StopOrderRequest(
-                symbol=sym, qty=abs(qty), side=side,
-                stop_price=float(desired), time_in_force=TimeInForce.GTC))
 
-            if need_qty:
-                result["armed"] += 1
-            else:
-                result["trailed"] += 1
-            log.info("stop_guard: %s qty=%s stop %s -> %s (covered %s/%s)",
-                     sym, abs(qty), existing_level, desired, covered, abs(qty))
+            client.submit_order(StopOrderRequest(
+                symbol=sym, qty=place_qty, side=side,
+                stop_price=float(stop), time_in_force=TimeInForce.GTC))
+            result["armed"] += 1
+            log.info("stop_guard: armed GTC stop %s %d@%s (covered %d/%d)",
+                     sym, place_qty, stop, covered, qty)
         except Exception:
             log.exception("stop_guard: failed for %s", sym)
             result["errors"] += 1
