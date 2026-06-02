@@ -176,12 +176,14 @@ async def main():
     scheduler.add_job(archive_market_data_job,
                       CronTrigger(hour=2, minute=0, timezone=ET))
 
-    # Self-healing stop guard: re-arm GTC stops on any unprotected position.
-    # Just after the open (DAY bracket legs expire overnight) + a midday sweep.
+    # Active stop guard: keep every position fully covered by a GTC stop and
+    # trail it up on winners, continuously through the trading day.
     scheduler.add_job(stop_guard_job,
-                      CronTrigger(day_of_week="mon-fri", hour=9, minute=31, timezone=ET))
+                      CronTrigger(day_of_week="mon-fri", hour="9-15",
+                                  minute=f"*/{settings.stop_guard_interval_minutes}",
+                                  timezone=ET))
     scheduler.add_job(stop_guard_job,
-                      CronTrigger(day_of_week="mon-fri", hour=13, minute=0, timezone=ET))
+                      CronTrigger(day_of_week="mon-fri", hour=15, minute=58, timezone=ET))
 
     # 24/7 intervals
     # 20-min interval = 72 batched requests/day, comfortable headroom under
@@ -251,6 +253,20 @@ async def main():
     order_stream = AlpacaOrderStream()
     market_task = asyncio.create_task(market_stream.run_forever())
     order_task = asyncio.create_task(order_stream.run_forever())
+
+    # Deadlock guard: the SOD-equity snapshot only fires at the 9:29 ET cron, so
+    # an off-hours restart can leave the baseline unset — which read_sod_equity()
+    # treats as fatal and engages the kill switch (halting everything, and then
+    # blocking the very snapshot job that would fix it). Seed it on startup when
+    # missing on a trading day so a restart can never strand the system.
+    try:
+        from app.core.redis import redis_client as _rc
+        from app.services.equity import SOD_EQUITY_KEY, snapshot_sod_equity
+        if is_trading_day() and _rc.get(SOD_EQUITY_KEY) is None:
+            snapshot_sod_equity()
+            log.info("startup: SOD equity baseline was missing; snapshotted to recover")
+    except Exception:
+        log.exception("startup SOD snapshot check failed")
 
     scheduler.start()
     log.info("scheduler started with %d providers", len(providers))

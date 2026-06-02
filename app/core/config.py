@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     swing_max_hold_days: int = 10
     intraday_eod_close_et: str = "15:55"              # HH:MM ET; close intraday at/after this
     horizon_exit_interval_minutes: int = 15           # sweep cadence during RTH
+
+    # Active stop guard: keep every open position fully covered by a GTC stop
+    # and trail it up on winners (ratchet only). Runs through the trading day.
+    stop_guard_interval_minutes: int = 15
+    stop_guard_trail_enabled: bool = True
+    stop_guard_min_trail_step_pct: float = 0.005      # only trail up if >=0.5% better
     # Per-sleeve fraction of equity. Premium remains reserved for Phase 5
     # (CSP options); its 30% slot is reallocated to the discretionary LLM
     # sleeve until then so news/filing-derived proposals have a real budget.
