@@ -46,8 +46,10 @@ class Settings(BaseSettings):
     # Active stop guard: keep every open position fully covered by a GTC stop
     # and trail it up on winners (ratchet only). Runs through the trading day.
     stop_guard_interval_minutes: int = 15
-    stop_guard_trail_enabled: bool = True
-    stop_guard_min_trail_step_pct: float = 0.005      # only trail up if >=0.5% better
+    # Native Alpaca trailing-stop percentages (broker-managed; ratchet up on
+    # their own, no cancel/replace). Wider for position-horizon (let trends run).
+    stop_guard_trail_percent: float = 5.0          # short / swing / unknown horizon
+    stop_guard_trail_percent_long: float = 8.0     # position horizon
     # Per-sleeve fraction of equity. Premium remains reserved for Phase 5
     # (CSP options); its 30% slot is reallocated to the discretionary LLM
     # sleeve until then so news/filing-derived proposals have a real budget.

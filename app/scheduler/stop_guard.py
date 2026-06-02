@@ -15,21 +15,18 @@ kill switch — open positions must stay protected even when entries are halted.
 """
 import logging
 from collections import defaultdict
-from decimal import Decimal
 
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, StopOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.db import SessionLocal
 from app.execution.service import _alpaca
 from app.models import Trade, TradeProposal
 from app.models.enums import TradeStatus
-from app.risk.sizing import reconcile_bracket
 
 log = logging.getLogger(__name__)
-_CENTS = Decimal("0.01")
-_MIN_GAP = Decimal("0.001")  # a resting stop must sit at least 0.1% off the price
 
 
 def _intended_levels(sym: str):
@@ -103,22 +100,17 @@ def run_once() -> dict:
                 continue
 
             is_long = float(p.qty) > 0
-            entry = Decimal(str(p.avg_entry_price))
-            current = Decimal(str(p.current_price or p.avg_entry_price))
-            prop_stop, prop_tgt, horizon = _intended_levels(sym)
-            stop = reconcile_bracket(
-                "buy" if is_long else "sell", entry, prop_stop, prop_tgt, horizon=horizon)[0]
-            gap = current * _MIN_GAP
-            stop = (min(stop, current - gap) if is_long
-                    else max(stop, current + gap)).quantize(_CENTS)
+            _, _, horizon = _intended_levels(sym)
+            trail = (settings.stop_guard_trail_percent_long
+                     if (horizon is not None and horizon.value == "position")
+                     else settings.stop_guard_trail_percent)
             side = OrderSide.SELL if is_long else OrderSide.BUY
-
-            client.submit_order(StopOrderRequest(
+            client.submit_order(TrailingStopOrderRequest(
                 symbol=sym, qty=place_qty, side=side,
-                stop_price=float(stop), time_in_force=TimeInForce.GTC))
+                trail_percent=trail, time_in_force=TimeInForce.GTC))
             result["armed"] += 1
-            log.info("stop_guard: armed GTC stop %s %d@%s (covered %d/%d)",
-                     sym, place_qty, stop, covered, qty)
+            log.info("stop_guard: armed %.1f%% trailing stop on %s (%d sh, covered %d/%d)",
+                     trail, sym, place_qty, covered, qty)
         except Exception:
             log.exception("stop_guard: failed for %s", sym)
             result["errors"] += 1
