@@ -88,6 +88,36 @@ FILING_PROMPT_TEMPLATE = dedent("""
 """).strip()
 
 
+LOSS_ANALYSIS_PROMPT = dedent("""
+    You are a trading post-mortem analyst. A trade just closed at a LOSS.
+    Your job is to explain exactly why it lost and extract a clear, specific lesson
+    that should be remembered and applied to future trades.
+
+    TRADE DETAILS:
+    - Ticker:          {ticker}
+    - Sector:          {sector}
+    - Signal type:     {signal_type}
+    - Entry price:     ${entry_price}
+    - Exit price:      ${exit_price}
+    - Qty:             {qty}
+    - Realized P&L:    ${realized_pnl} ({pnl_pct:.1f}%)
+    - Original thesis: {thesis}
+
+    Analyze:
+    1. What specifically went wrong? (bad timing, overbought entry, sector weakness,
+       macro event, flawed thesis, stop too tight, wrong signal type?)
+    2. Was the thesis fundamentally wrong, or was it right but poorly timed?
+    3. What ONE specific rule should be remembered to avoid this mistake?
+
+    Be concise and specific. Generic answers like "market moved against us" are useless.
+    Respond with a single JSON object:
+    {{
+      "loss_reason": "specific explanation of why it lost (2-3 sentences)",
+      "lesson": "specific rule to apply to future trades on this ticker/sector/signal (1 sentence)"
+    }}
+""").strip()
+
+
 CANDIDATE_PROMPT_TEMPLATE = dedent("""
     You are a disciplined trading analyst. A mechanical screen surfaced the stock
     below as a {signal} setup. Decide whether it's a sound BUY right now, sized
@@ -104,6 +134,9 @@ CANDIDATE_PROMPT_TEMPLATE = dedent("""
     - Sector:            {sector}
     - Market cap:        {market_cap}
     - P/E:               {pe}
+
+    PAST LESSONS ON THIS TICKER/SECTOR (from previous losses — apply these):
+    {lessons_block}
 
     Consider trend quality, whether it's over-extended, the sector backdrop, and
     whether the risk/reward from here is favorable. If you buy, set a real

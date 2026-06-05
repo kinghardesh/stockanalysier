@@ -221,6 +221,28 @@ def positions(request: Request, _=Depends(dash_auth.require_auth)):
     )
 
 
+@router.get("/lessons", response_class=HTMLResponse)
+def lessons_page(request: Request, _=Depends(dash_auth.require_auth)):
+    from app.models import TradeLesson
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(TradeLesson).order_by(desc(TradeLesson.created_at)).limit(50)
+        ).scalars().all()
+    items = [{
+        "ticker": r.ticker, "sector": r.sector or "",
+        "signal_type": r.signal_type or "",
+        "entry_price": float(r.entry_price) if r.entry_price else None,
+        "exit_price": float(r.exit_price) if r.exit_price else None,
+        "pnl": float(r.realized_pnl or 0),
+        "pnl_pct": float(r.pnl_pct or 0),
+        "loss_reason": r.loss_reason or "",
+        "lesson": r.lesson or "",
+        "date": r.created_at.strftime("%Y-%m-%d") if r.created_at else "",
+    } for r in rows]
+    return templates.TemplateResponse(
+        "lessons.html", {"request": request, "active": "lessons", "lessons": items})
+
+
 @router.get("/screen", response_class=HTMLResponse)
 def screen(request: Request, _=Depends(dash_auth.require_auth)):
     """Daily mechanical screen candidates + the shadow (would-be) trades."""

@@ -166,12 +166,20 @@ async def run_candidate_pipeline(orchestrator, executor: ExecutionService | None
                 continue
 
             if settings.screen_llm_vet:
+                from app.analysis.lessons import get_lessons_for
+                lessons = get_lessons_for(c.ticker, fund.get("sector"))
+                lessons_block = (
+                    "\n".join(f"  • {l['ticker']} P&L=${l['pnl']:>+,.0f}: {l['lesson']}"
+                               for l in lessons)
+                    if lessons else "  (none yet)"
+                )
                 assessment = await orchestrator.analyze_candidate({
                     "ticker": c.ticker, "signal": c.signal, "price": f"{entry:.2f}",
                     "sma50": (f"{float(c.sma50):.2f}" if c.sma50 else "n/a"),
                     "sma200": (f"{float(c.sma200):.2f}" if c.sma200 else "n/a"),
                     "rsi": (f"{float(c.rsi):.1f}" if c.rsi else "n/a"),
                     "sector": fund["sector"], "market_cap": fund["market_cap"], "pe": fund["pe"],
+                    "lessons_block": lessons_block,
                 })
                 if assessment is None:
                     shadow_rows.append(dict(ticker=c.ticker, signal=c.signal,

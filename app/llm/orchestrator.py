@@ -142,6 +142,7 @@ class LLMOrchestrator:
             sector=candidate.get("sector") or "unknown",
             market_cap=candidate.get("market_cap") or "n/a",
             pe=candidate.get("pe") or "n/a",
+            lessons_block=candidate.get("lessons_block") or "  (none yet)",
             schema_json=json.dumps(schema),
         )
 

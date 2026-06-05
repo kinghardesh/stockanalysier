@@ -52,6 +52,21 @@ def _get(obj, key):
     return getattr(obj, key, None) if not isinstance(obj, dict) else obj.get(key)
 
 
+async def _run_loss_analysis(*, ticker, entry_price, exit_price, qty,
+                              realized_pnl, thesis, signal_type):
+    """Fire-and-forget: ask Gemini why the trade lost and store the lesson."""
+    try:
+        from app.analysis.lessons import analyze_and_store_loss
+        lesson = await analyze_and_store_loss(
+            ticker=ticker, entry_price=entry_price, exit_price=exit_price,
+            qty=qty, realized_pnl=realized_pnl, thesis=thesis, signal_type=signal_type,
+        )
+        if lesson:
+            log.info("LESSON STORED for %s: %s", ticker, (lesson.lesson or "")[:100])
+    except Exception:
+        log.exception("loss analysis failed for %s", ticker)
+
+
 class AlpacaOrderStream:
     def __init__(self):
         self._stop = asyncio.Event()
@@ -97,18 +112,45 @@ class AlpacaOrderStream:
 
                     if trade is not None:
                         # Compute realized P&L: (exit_price - entry_price) * qty
+                        exit_px = exit_qty = pnl = None
                         try:
                             exit_px  = Decimal(str(filled_avg_raw)) if filled_avg_raw else None
                             exit_qty = Decimal(str(filled_qty_raw)) if filled_qty_raw else None
                             if exit_px and exit_qty and trade.filled_price:
-                                trade.realized_pnl = (exit_px - trade.filled_price) * exit_qty
+                                pnl = (exit_px - trade.filled_price) * exit_qty
+                                trade.realized_pnl = pnl
                         except Exception:
                             log.warning("could not compute realized_pnl for %s", symbol)
                         trade.closed_at = now
                         trade.status    = TradeStatus.filled
                         db.commit()
-                        log.info("position closed: ticker=%s exit=%.2f realized_pnl=%s",
-                                 symbol, float(filled_avg_raw or 0), trade.realized_pnl)
+
+                        pnl_f = float(pnl or 0)
+                        pnl_label = f"+${pnl_f:,.0f}" if pnl_f >= 0 else f"-${abs(pnl_f):,.0f}"
+                        log.info("TRADE CLOSED: %s exit=$%.2f  P&L %s  %s",
+                                 symbol, float(filled_avg_raw or 0), pnl_label,
+                                 "✓ PROFIT" if pnl_f >= 0 else "✗ LOSS — analyzing why...")
+
+                        # Async loss analysis: fetch thesis from proposal, call AI
+                        if pnl is not None and pnl < 0:
+                            thesis = ""
+                            try:
+                                from sqlalchemy import desc as _desc
+                                from app.models import TradeProposal as _TP
+                                with SessionLocal() as _db:
+                                    _prop = _db.execute(
+                                        select(_TP).where(_TP.ticker == symbol)
+                                        .order_by(_desc(_TP.created_at)).limit(1)
+                                    ).scalar_one_or_none()
+                                    thesis = (_prop.thesis or "") if _prop else ""
+                                    sig_t  = str(getattr(_prop, "tier", "")).split(".")[-1] if _prop else "unknown"
+                            except Exception:
+                                sig_t = "unknown"
+                            asyncio.create_task(_run_loss_analysis(
+                                ticker=symbol, entry_price=trade.filled_price,
+                                exit_price=exit_px, qty=int(exit_qty),
+                                realized_pnl=pnl, thesis=thesis, signal_type=sig_t,
+                            ))
                     else:
                         log.debug("sell fill for unknown ticker=%s order=%s", symbol, order_id)
                     return

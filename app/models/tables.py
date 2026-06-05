@@ -317,6 +317,36 @@ class ShadowTrade(Base):
     )
 
 
+class TradeLesson(Base):
+    """Permanent memory: AI-analyzed post-mortem of every losing trade.
+    Injected into future LLM prompts so the system avoids repeating mistakes."""
+    __tablename__ = "trade_lessons"
+    __table_args__ = (
+        Index("ix_trade_lessons_ticker", "ticker"),
+        Index("ix_trade_lessons_sector", "sector"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    sector: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    signal_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    entry_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    exit_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    qty: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    realized_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    pnl_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4), nullable=True)
+    entry_thesis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    loss_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # AI analysis
+    lesson: Mapped[Optional[str]] = mapped_column(Text, nullable=True)         # what to avoid
+    raw_context: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class SanitizationLog(Base):
     __tablename__ = "sanitization_log"
 

@@ -4,7 +4,7 @@ from app.models.enums import (
 )
 from app.models.tables import (
     Asset, CompanyFundamentals, DailyBar, DailySummary, MarketData, Position, RiskEvent,
-    SanitizationLog, ScreenCandidate, ShadowTrade, Signal, Trade, TradeProposal,
+    SanitizationLog, ScreenCandidate, ShadowTrade, Signal, Trade, TradeLesson, TradeProposal,
 )
 
 __all__ = [
@@ -12,5 +12,5 @@ __all__ = [
     "TradeStatus", "TradeSleeve", "RiskEventType", "TimeHorizon", "horizon_bucket",
     "Signal", "TradeProposal", "Trade", "Position", "RiskEvent", "SanitizationLog",
     "DailySummary", "DailyBar", "CompanyFundamentals", "MarketData", "Asset",
-    "ScreenCandidate", "ShadowTrade",
+    "ScreenCandidate", "ShadowTrade", "TradeLesson",
 ]
